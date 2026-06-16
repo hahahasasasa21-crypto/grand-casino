@@ -2082,7 +2082,7 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
 }
 
 // ==========================================
-// Component: Roulette（数字ルーレット）
+// Component: Roulette（数字ルーレット）— 改良版
 // ==========================================
 function RouletteView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
   const ROULETTE_ZONES = [
@@ -2106,16 +2106,22 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
 
   const [bets, setBets] = useState({ 1: 0, 3: 0, 5: 0, 10: 0, 20: 0 });
   const [betInput, setBetInput] = useState({ 1: '', 3: '', 5: '', 10: '', 20: '' });
-  const [phase, setPhase] = useState('BETTING');
+  const [phase, setPhase] = useState('BETTING'); // BETTING | SPINNING | RESULT | WAIT
   const [resultZone, setResultZone] = useState(null);
   const [winAmount, setWinAmount] = useState(0);
   const [totalBetAmount, setTotalBetAmount] = useState(0);
   const [spinHistory, setSpinHistory] = useState([]);
+  const [autoSpin, setAutoSpin] = useState(false);
+  const [waitCountdown, setWaitCountdown] = useState(9);
+
   const canvasRef = React.useRef(null);
   const animRef = React.useRef(null);
+  const autoRef = React.useRef(false);
+  const waitTimerRef = React.useRef(null);
   const angleRef = React.useRef(0);
   const ballAngleRef = React.useRef(0);
   const ballRadiusRef = React.useRef(0);
+  const phaseRef = React.useRef('BETTING');
 
   const totalBet = Object.values(bets).reduce((a, b) => a + b, 0);
 
@@ -2125,77 +2131,123 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
     const ctx = canvas.getContext('2d');
     const W = canvas.width, H = canvas.height;
     const cx = W / 2, cy = H / 2;
-    const R = Math.min(W, H) / 2 - 8;
+    const R = Math.min(W, H) / 2 - 10;
 
     ctx.clearRect(0, 0, W, H);
+
+    // 外枠リング
+    ctx.beginPath();
+    ctx.arc(cx, cy, R + 8, 0, Math.PI * 2);
+    ctx.fillStyle = '#1f2937';
+    ctx.fill();
+    ctx.strokeStyle = '#374151';
+    ctx.lineWidth = 3;
+    ctx.stroke();
 
     const sliceAngle = (Math.PI * 2) / TOTAL_SLOTS;
     WHEEL_SLOTS.forEach((val, i) => {
       const zone = ROULETTE_ZONES.find(z => z.value === val);
       const startA = currentAngle + i * sliceAngle - Math.PI / 2;
       const endA = startA + sliceAngle;
+
+      // セル背景
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.arc(cx, cy, R, startA, endA);
       ctx.closePath();
       ctx.fillStyle = zone.color;
       ctx.fill();
-      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
-      ctx.lineWidth = 1;
+
+      // セル境界線
+      ctx.strokeStyle = 'rgba(0,0,0,0.35)';
+      ctx.lineWidth = 1.2;
       ctx.stroke();
 
+      // 外縁ハイライト
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, startA, endA);
+      ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // 数字テキスト
       const midA = startA + sliceAngle / 2;
-      const tx = cx + (R * 0.72) * Math.cos(midA);
-      const ty = cy + (R * 0.72) * Math.sin(midA);
+      const tx = cx + (R * 0.70) * Math.cos(midA);
+      const ty = cy + (R * 0.70) * Math.sin(midA);
       ctx.save();
       ctx.translate(tx, ty);
       ctx.rotate(midA + Math.PI / 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.font = `bold ${Math.max(9, Math.floor(R * 0.085))}px monospace`;
+      ctx.fillStyle = 'rgba(255,255,255,0.95)';
+      ctx.font = `bold ${Math.max(10, Math.floor(R * 0.078))}px monospace`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(0,0,0,0.6)';
+      ctx.shadowBlur = 3;
       ctx.fillText(val.toString(), 0, 0);
       ctx.restore();
     });
 
+    // 中心ハブ
+    const hubR = R * 0.16;
+    const grad = ctx.createRadialGradient(cx - hubR * 0.3, cy - hubR * 0.3, 0, cx, cy, hubR);
+    grad.addColorStop(0, '#374151');
+    grad.addColorStop(1, '#111827');
     ctx.beginPath();
-    ctx.arc(cx, cy, R * 0.18, 0, Math.PI * 2);
-    ctx.fillStyle = '#111827';
+    ctx.arc(cx, cy, hubR, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
     ctx.fill();
-    ctx.strokeStyle = '#374151';
+    ctx.strokeStyle = '#4b5563';
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    // 中心アイコン
     ctx.fillStyle = '#f59e0b';
-    ctx.font = `bold ${Math.floor(R * 0.12)}px sans-serif`;
+    ctx.font = `bold ${Math.floor(hubR * 1.1)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('🎡', cx, cy);
 
+    // ポインター（上部三角）
+    const ptrY = cy - R - 3;
     ctx.beginPath();
-    ctx.moveTo(cx, cy - R - 4);
-    ctx.lineTo(cx - 10, cy - R + 14);
-    ctx.lineTo(cx + 10, cy - R + 14);
+    ctx.moveTo(cx, ptrY + 2);
+    ctx.lineTo(cx - 11, ptrY + 20);
+    ctx.lineTo(cx + 11, ptrY + 20);
     ctx.closePath();
-    ctx.fillStyle = '#f59e0b';
+    const ptrGrad = ctx.createLinearGradient(cx, ptrY, cx, ptrY + 20);
+    ptrGrad.addColorStop(0, '#f59e0b');
+    ptrGrad.addColorStop(1, '#d97706');
+    ctx.fillStyle = ptrGrad;
     ctx.fill();
     ctx.strokeStyle = '#92400e';
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    // ボール
     if (bRadius > 0) {
       const bx = cx + bRadius * Math.cos(bAngle - Math.PI / 2);
       const by = cy + bRadius * Math.sin(bAngle - Math.PI / 2);
+      // ボールの影
       ctx.beginPath();
-      ctx.arc(bx, by, 7, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
+      ctx.arc(bx + 2, by + 2, 8, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.4)';
+      ctx.fill();
+      // ボール本体
+      const ballGrad = ctx.createRadialGradient(bx - 2, by - 2, 1, bx, by, 8);
+      ballGrad.addColorStop(0, '#ffffff');
+      ballGrad.addColorStop(0.6, '#e5e7eb');
+      ballGrad.addColorStop(1, '#9ca3af');
+      ctx.beginPath();
+      ctx.arc(bx, by, 8, 0, Math.PI * 2);
+      ctx.fillStyle = ballGrad;
       ctx.fill();
       ctx.strokeStyle = '#d1d5db';
-      ctx.lineWidth = 1.5;
+      ctx.lineWidth = 1;
       ctx.stroke();
+      // ハイライト
       ctx.beginPath();
-      ctx.arc(bx - 2, by - 2, 2.5, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      ctx.arc(bx - 2.5, by - 2.5, 3, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.7)';
       ctx.fill();
     }
   }, [WHEEL_SLOTS, TOTAL_SLOTS]);
@@ -2203,6 +2255,15 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
   React.useEffect(() => {
     drawWheel(0, 0, 0);
   }, [drawWheel]);
+
+  // autoRef と phaseRef を常に同期
+  React.useEffect(() => {
+    autoRef.current = autoSpin;
+  }, [autoSpin]);
+
+  React.useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
 
   const handleBetChange = (value, inputVal) => {
     setBetInput(prev => ({ ...prev, [value]: inputVal }));
@@ -2215,13 +2276,39 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
     setBetInput({ 1: '', 3: '', 5: '', 10: '', 20: '' });
   };
 
-  const spin = async () => {
-    if (totalBet <= 0) { showToast('賭け金を設定してください！', 'error'); return; }
-    if (totalBet > balance) { showToast('残高が足りません！', 'error'); return; }
+  // 9秒カウントダウン待機 → 自動スピン
+  const startWaitCountdown = React.useCallback((currentBets, currentBalance) => {
+    setPhase('WAIT');
+    phaseRef.current = 'WAIT';
+    setWaitCountdown(9);
+    let count = 9;
+    waitTimerRef.current = setInterval(() => {
+      count -= 1;
+      setWaitCountdown(count);
+      if (count <= 0) {
+        clearInterval(waitTimerRef.current);
+        if (autoRef.current) {
+          executeSpin(currentBets, currentBalance);
+        } else {
+          setPhase('BETTING');
+          phaseRef.current = 'BETTING';
+        }
+      }
+    }, 1000);
+  }, []);
 
-    await updateBalance(-totalBet);
-    setTotalBetAmount(totalBet);
+  const executeSpin = React.useCallback(async (currentBets, currentBalance) => {
+    const bet = currentBets || bets;
+    const bal = currentBalance || balance;
+    const total = Object.values(bet).reduce((a, b) => a + b, 0);
+
+    if (total <= 0) { showToast('賭け金を設定してください！', 'error'); setPhase('BETTING'); return; }
+    if (total > bal) { showToast('残高が足りません！', 'error'); setPhase('BETTING'); setAutoSpin(false); return; }
+
+    await updateBalance(-total);
+    setTotalBetAmount(total);
     setPhase('SPINNING');
+    phaseRef.current = 'SPINNING';
     setResultZone(null);
     setWinAmount(0);
 
@@ -2240,7 +2327,7 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
     const duration = 4000 + Math.random() * 1500;
 
     const canvas = canvasRef.current;
-    const R = canvas ? Math.min(canvas.width, canvas.height) / 2 - 8 : 120;
+    const R = canvas ? Math.min(canvas.width, canvas.height) / 2 - 10 : 200;
     ballRadiusRef.current = R * 0.88;
 
     const animate = (now) => {
@@ -2265,7 +2352,7 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
         ballRadiusRef.current = 0;
         drawWheel(targetAngle, 0, 0);
 
-        const betOnWinner = bets[winValue] || 0;
+        const betOnWinner = bet[winValue] || 0;
         const payout = betOnWinner * winValue;
 
         if (payout > 0) {
@@ -2275,39 +2362,83 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
         setResultZone(winZone);
         setWinAmount(payout);
         setPhase('RESULT');
+        phaseRef.current = 'RESULT';
 
-        const histEntry = { value: winValue, payout, net: payout - totalBet, bet: totalBet };
+        const histEntry = { value: winValue, payout, net: payout - total, bet: total };
         setSpinHistory(prev => [histEntry, ...prev].slice(0, 10));
 
         if (payout > 0) {
-          if (payout - totalBet >= 50000) {
-            emitNews(`🎡 ${playerName} がルーレットで大勝ち！ ×${winValue}エリア当選 +${(payout - totalBet).toLocaleString()} G！`, 'jackpot');
+          if (payout - total >= 50000) {
+            emitNews(`🎡 ${playerName} がルーレットで大勝ち！ ×${winValue}エリア当選 +${(payout - total).toLocaleString()} G！`, 'jackpot');
           }
           showToast(`🎡 ${winValue}エリア当選！ +${payout.toLocaleString()} G！`, 'success');
         } else {
           showToast(`😢 ${winValue}エリア…ハズレ`, 'error');
         }
+
+        // オートスピンなら9秒待機開始
+        if (autoRef.current) {
+          setTimeout(() => {
+            startWaitCountdown(bet, bal - total + payout);
+          }, 1200);
+        }
       }
     };
 
     animRef.current = requestAnimationFrame(animate);
+  }, [bets, balance, updateBalance, WHEEL_SLOTS, TOTAL_SLOTS, drawWheel, playerName, emitNews, showToast, startWaitCountdown]);
+
+  const spin = () => {
+    if (phase !== 'BETTING') return;
+    executeSpin(bets, balance);
   };
 
-  React.useEffect(() => {
-    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
-  }, []);
+  const toggleAutoSpin = () => {
+    const next = !autoSpin;
+    setAutoSpin(next);
+    autoRef.current = next;
+
+    if (!next) {
+      // オートOFF → 待機タイマーを止める
+      clearInterval(waitTimerRef.current);
+      if (phaseRef.current === 'WAIT') {
+        setPhase('BETTING');
+        phaseRef.current = 'BETTING';
+      }
+    } else {
+      // オートON → BETTINGなら即スピン
+      if (phaseRef.current === 'BETTING') {
+        executeSpin(bets, balance);
+      }
+    }
+  };
 
   const resetForNextSpin = () => {
     setPhase('BETTING');
+    phaseRef.current = 'BETTING';
     setResultZone(null);
     setWinAmount(0);
   };
 
+  React.useEffect(() => {
+    return () => {
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+      clearInterval(waitTimerRef.current);
+    };
+  }, []);
+
   return (
-    <div className="p-4 md:p-8 max-w-5xl mx-auto">
-      <div className="w-full flex justify-between items-center mb-6">
-        <button onClick={() => { if (animRef.current) cancelAnimationFrame(animRef.current); onBack(); }}
-          className="flex items-center gap-2 text-gray-400 hover:text-white transition">
+    <div className="p-4 md:p-6 max-w-6xl mx-auto">
+      {/* ヘッダー */}
+      <div className="w-full flex justify-between items-center mb-5">
+        <button
+          onClick={() => {
+            if (animRef.current) cancelAnimationFrame(animRef.current);
+            clearInterval(waitTimerRef.current);
+            onBack();
+          }}
+          className="flex items-center gap-2 text-gray-400 hover:text-white transition"
+        >
           <ArrowLeft size={20} /> 戻る
         </button>
         <div className="bg-gray-900/95 px-5 py-2 rounded-full border border-gray-800 font-mono text-xl text-yellow-500 font-bold">
@@ -2315,76 +2446,119 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
         </div>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-        {/* ホイール + 結果 */}
-        <div className="xl:col-span-3 flex flex-col items-center gap-4">
-          <div className="relative w-full max-w-xs md:max-w-sm">
-            <canvas ref={canvasRef} width={320} height={320}
-              className="w-full h-auto rounded-full border-4 border-gray-800 shadow-2xl" />
-            {phase === 'SPINNING' && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                <div className="bg-black/40 rounded-full w-20 h-20 flex items-center justify-center">
-                  <RefreshCw className="text-yellow-400 animate-spin" size={36} />
+      {/* メインレイアウト：左=ホイール、右=ベットパネル（同じ高さに揃える） */}
+      <div className="flex flex-col xl:flex-row gap-5 items-stretch">
+
+        {/* ===== 左：ホイールエリア ===== */}
+        <div className="xl:w-[55%] flex flex-col gap-4">
+
+          {/* ルーレットキャンバス */}
+          <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 shadow-2xl p-5 flex flex-col items-center gap-4 flex-1">
+            <div className="relative w-full flex justify-center">
+              <canvas
+                ref={canvasRef}
+                width={480}
+                height={480}
+                className="w-full max-w-[480px] h-auto rounded-full border-4 border-gray-700 shadow-2xl shadow-black/40"
+              />
+
+              {/* スピン中オーバーレイ */}
+              {phase === 'SPINNING' && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="bg-black/30 rounded-full w-24 h-24 flex flex-col items-center justify-center">
+                    <RefreshCw className="text-yellow-400 animate-spin mb-1" size={32} />
+                    <span className="text-yellow-400 text-xs font-black">SPIN</span>
+                  </div>
+                </div>
+              )}
+
+              {/* 9秒待機オーバーレイ */}
+              {phase === 'WAIT' && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="bg-black/50 rounded-full w-28 h-28 flex flex-col items-center justify-center border-2 border-yellow-500/40">
+                    <span className="text-yellow-400 text-4xl font-black leading-none">{waitCountdown}</span>
+                    <span className="text-yellow-400/70 text-xs font-bold mt-1">次のスピン</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 結果表示 */}
+            {phase === 'RESULT' && resultZone && (
+              <div className={`w-full max-w-[480px] p-5 rounded-2xl border-4 text-center shadow-2xl ${winAmount > 0 ? 'border-yellow-500 bg-yellow-500/10' : 'border-gray-700 bg-gray-900/80'}`}>
+                <div className="flex items-center justify-center gap-4 flex-wrap">
+                  <div>
+                    <div className={`text-2xl font-black ${resultZone.textClass}`}>
+                      {resultZone.value}エリア当選
+                    </div>
+                    <div className="text-gray-400 text-sm">配当倍率 <span className={`font-black ${resultZone.textClass}`}>×{resultZone.value}</span></div>
+                  </div>
+                  {winAmount > 0 ? (
+                    <div className="text-right">
+                      <div className="text-3xl font-black text-emerald-400">+{winAmount.toLocaleString()} G</div>
+                      <div className={`text-sm font-bold ${winAmount - totalBetAmount >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        純損益 {winAmount - totalBetAmount >= 0 ? '+' : ''}{(winAmount - totalBetAmount).toLocaleString()} G
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-2xl font-black text-red-400">ハズレ</div>
+                      <div className="text-red-400 text-sm">-{totalBetAmount.toLocaleString()} G</div>
+                    </div>
+                  )}
+                </div>
+                {!autoSpin && (
+                  <div className="flex gap-3 mt-4">
+                    <button onClick={resetForNextSpin}
+                      className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-2.5 rounded-xl transition active:scale-95">
+                      もう一度！
+                    </button>
+                    <button onClick={onBack} className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2.5 rounded-xl font-bold transition">終了</button>
+                  </div>
+                )}
+                {autoSpin && (
+                  <div className="mt-3 text-yellow-400/70 text-sm font-bold animate-pulse">
+                    {waitCountdown > 0 ? `${waitCountdown}秒後に次のスピン...` : '準備中...'}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* スピン履歴 */}
+            {spinHistory.length > 0 && (
+              <div className="w-full max-w-[480px] bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden">
+                <div className="px-4 py-2 border-b border-gray-800 text-xs font-black text-gray-400 tracking-widest flex items-center justify-between">
+                  <span>SPIN HISTORY</span>
+                  <span className="text-gray-600">{spinHistory.length} 回</span>
+                </div>
+                <div className="flex flex-wrap gap-2 p-3">
+                  {spinHistory.map((h, i) => {
+                    const zone = ROULETTE_ZONES.find(z => z.value === h.value);
+                    return (
+                      <div key={i}
+                        className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-black shadow-md border-2 ${zone.borderClass} ${h.net >= 0 ? 'ring-1 ring-emerald-500/50' : ''}`}
+                        style={{ backgroundColor: zone.color }}
+                        title={`${h.net >= 0 ? '+' : ''}${h.net.toLocaleString()} G`}
+                      >
+                        {h.value}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
           </div>
-
-          {phase === 'RESULT' && resultZone && (
-            <div className={`w-full max-w-sm p-6 rounded-3xl border-4 text-center shadow-2xl ${winAmount > 0 ? 'border-yellow-500 bg-yellow-500/10' : 'border-gray-700 bg-gray-900/80'}`}>
-              <div className="text-5xl mb-3">{winAmount > 0 ? '🎡' : '😢'}</div>
-              <div className={`text-3xl font-black mb-1 ${resultZone.textClass}`}>{resultZone.value}エリア 当選！</div>
-              <div className="text-gray-400 text-sm mb-3">
-                配当倍率 <span className={`font-black ${resultZone.textClass}`}>×{resultZone.value}</span>
-              </div>
-              {winAmount > 0 ? (
-                <div>
-                  <div className="text-4xl font-black text-emerald-400 mb-1">+{winAmount.toLocaleString()} G</div>
-                  <div className={`text-sm font-bold ${winAmount - totalBetAmount >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                    純損益: {winAmount - totalBetAmount >= 0 ? '+' : ''}{(winAmount - totalBetAmount).toLocaleString()} G
-                  </div>
-                </div>
-              ) : (
-                <div>
-                  <div className="text-3xl font-black text-red-400 mb-1">ハズレ</div>
-                  <div className="text-red-400 text-sm">-{totalBetAmount.toLocaleString()} G</div>
-                </div>
-              )}
-              <div className="flex gap-3 mt-5">
-                <button onClick={resetForNextSpin}
-                  className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-3 rounded-xl transition active:scale-95">
-                  もう一度！
-                </button>
-                <button onClick={onBack} className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-3 rounded-xl font-bold transition">終了</button>
-              </div>
-            </div>
-          )}
-
-          {spinHistory.length > 0 && (
-            <div className="w-full max-w-sm bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden">
-              <div className="px-4 py-2 border-b border-gray-800 text-xs font-black text-gray-400 tracking-widest">SPIN HISTORY</div>
-              <div className="flex flex-wrap gap-2 p-3">
-                {spinHistory.map((h, i) => {
-                  const zone = ROULETTE_ZONES.find(z => z.value === h.value);
-                  return (
-                    <div key={i} className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-xs font-black shadow-md border-2 ${zone.borderClass}`}
-                      style={{ backgroundColor: zone.color }}>
-                      {h.value}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* ベットパネル */}
-        <div className="xl:col-span-2 flex flex-col gap-4">
-          <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 p-6 shadow-2xl">
-            <h3 className="text-xl font-black text-white mb-1">🎡 ROULETTE</h3>
-            <p className="text-gray-500 text-xs mb-5">賭けたいエリアに金額を入力してください</p>
+        {/* ===== 右：ベットパネル ===== */}
+        <div className="xl:w-[45%] flex flex-col">
+          <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 p-5 shadow-2xl flex flex-col flex-1">
 
-            <div className="space-y-3 mb-5">
+            <h3 className="text-xl font-black text-white mb-0.5">🎡 ROULETTE BET</h3>
+            <p className="text-gray-500 text-xs mb-4">賭けたいエリアに金額を入力してください</p>
+
+            {/* ベットゾーン一覧 */}
+            <div className="space-y-2.5 flex-1 overflow-y-auto mb-4">
               {ROULETTE_ZONES.map(zone => (
                 <div key={zone.value}
                   className={`p-3 rounded-xl border-2 transition-all ${bets[zone.value] > 0 ? `${zone.borderClass} bg-gray-950` : 'border-gray-800 bg-gray-950/60'}`}>
@@ -2398,25 +2572,30 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
                       <div className="text-gray-500 text-xs">当選確率 {Math.round((zone.weight / TOTAL_SLOTS) * 1000) / 10}%</div>
                     </div>
                     {bets[zone.value] > 0 && (
-                      <div className="text-right">
+                      <div className="text-right flex-shrink-0">
                         <div className={`text-xs font-bold ${zone.textClass}`}>→ {(bets[zone.value] * zone.value).toLocaleString()} G</div>
                       </div>
                     )}
                   </div>
-                  <div className="relative">
-                    <input type="number" value={betInput[zone.value]} onChange={e => handleBetChange(zone.value, e.target.value)}
-                      placeholder="0" disabled={phase !== 'BETTING'}
-                      className="w-full bg-gray-900 text-white font-mono text-base p-2.5 pr-12 rounded-lg border border-gray-700 focus:outline-none focus:border-yellow-500 disabled:opacity-50"
-                      min="0" step="100" />
+                  <div className="relative mb-1.5">
+                    <input
+                      type="number"
+                      value={betInput[zone.value]}
+                      onChange={e => handleBetChange(zone.value, e.target.value)}
+                      placeholder="0"
+                      disabled={phase !== 'BETTING'}
+                      className="w-full bg-gray-900 text-white font-mono text-base p-2 pr-10 rounded-lg border border-gray-700 focus:outline-none focus:border-yellow-500 disabled:opacity-50"
+                      min="0" step="100"
+                    />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 text-xs font-bold">G</span>
                   </div>
-                  <div className="flex gap-1.5 mt-1.5">
+                  <div className="flex gap-1.5">
                     {[100, 500, 1000, 5000].map(v => (
                       <button key={v}
                         onClick={() => handleBetChange(zone.value, (bets[zone.value] + v).toString())}
                         disabled={phase !== 'BETTING'}
                         className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs py-1 rounded transition disabled:opacity-40">
-                        +{v >= 1000 ? v/1000 + 'K' : v}
+                        +{v >= 1000 ? v / 1000 + 'K' : v}
                       </button>
                     ))}
                   </div>
@@ -2424,25 +2603,58 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
               ))}
             </div>
 
-            <div className="border-t border-gray-800 pt-4">
-              <div className="flex justify-between items-center mb-4">
+            {/* 合計・操作 */}
+            <div className="border-t border-gray-800 pt-4 space-y-3">
+
+              {/* 合計賭け金 */}
+              <div className="flex justify-between items-center">
                 <span className="text-gray-400 text-sm font-bold">合計賭け金</span>
                 <span className="font-mono text-xl font-black text-yellow-400">{totalBet.toLocaleString()} G</span>
               </div>
-              <div className="flex gap-3">
-                <button onClick={clearBets} disabled={phase !== 'BETTING'}
-                  className="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-5 rounded-xl transition disabled:opacity-40 active:scale-95 text-sm">
+
+              {/* スピン + クリア ボタン行 */}
+              <div className="flex gap-2">
+                <button
+                  onClick={clearBets}
+                  disabled={phase !== 'BETTING'}
+                  className="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-4 rounded-xl transition disabled:opacity-40 active:scale-95 text-sm whitespace-nowrap">
                   クリア
                 </button>
-                <button onClick={spin} disabled={phase !== 'BETTING' || totalBet <= 0 || totalBet > balance}
+                <button
+                  onClick={spin}
+                  disabled={phase !== 'BETTING' || totalBet <= 0 || totalBet > balance}
                   className="flex-1 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-black py-3 rounded-xl text-lg shadow-lg shadow-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-2">
                   {phase === 'SPINNING' ? (
                     <><RefreshCw size={18} className="animate-spin" /> SPINNING...</>
+                  ) : phase === 'WAIT' ? (
+                    <><span className="text-xl font-black">{waitCountdown}</span><span className="text-sm">秒後</span></>
                   ) : '🎡 SPIN！'}
                 </button>
               </div>
 
-              <div className="mt-5 bg-gray-950 rounded-xl border border-gray-800 p-3">
+              {/* オートスピンボタン */}
+              <button
+                onClick={toggleAutoSpin}
+                className={`w-full py-3 rounded-xl font-black text-sm transition-all border-2 flex items-center justify-center gap-2 ${
+                  autoSpin
+                    ? 'bg-orange-600/20 border-orange-500 text-orange-400 hover:bg-orange-600/30'
+                    : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-gray-600'
+                }`}>
+                <RefreshCw size={16} className={autoSpin ? 'animate-spin' : ''} />
+                {autoSpin ? (
+                  phase === 'WAIT'
+                    ? `オートスピン ON — ${waitCountdown}秒後に次のスピン`
+                    : 'オートスピン ON — クリックでOFF'
+                ) : 'オートスピン OFF — クリックでON'}
+              </button>
+              {autoSpin && (
+                <div className="text-xs text-gray-500 text-center">
+                  ※ スピン後9秒の待機時間があります。賭け金は変更不可。
+                </div>
+              )}
+
+              {/* ペイテーブル */}
+              <div className="bg-gray-950 rounded-xl border border-gray-800 p-3">
                 <p className="text-gray-500 text-xs font-black tracking-widest mb-2 text-center">PAYTABLE</p>
                 <div className="space-y-1">
                   {ROULETTE_ZONES.map(zone => (
@@ -2458,7 +2670,7 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
                     </div>
                   ))}
                 </div>
-                <p className="text-gray-600 text-xs mt-2 text-center">※複数エリアへの同時ベット可能</p>
+                <p className="text-gray-600 text-xs mt-2 text-center">※ 複数エリアへの同時ベット可能</p>
               </div>
             </div>
           </div>

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, getDocs } from 'firebase/firestore';
-import { Coins, Trophy, ArrowLeft, AlertCircle, PlaySquare, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, Briefcase, Lock, Star, Newspaper, Pickaxe, BookOpen, History, Bomb, Spade } from 'lucide-react';
+import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, getDocs, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { Coins, Trophy, ArrowLeft, AlertCircle, PlaySquare, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, Briefcase, Lock, Star, Newspaper, Pickaxe, BookOpen, History, Bomb, Scissors, Hand, Square } from 'lucide-react';
 import { firebaseConfig, appId } from './firebaseConfig';
 
 const app = initializeApp(firebaseConfig);
@@ -81,71 +81,21 @@ const MINE_LEVELS = [
   { label: '地獄坑道', cost: 5000, rows: 10, cols: 14, mines: 65, reward: 30000, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30', icon: '☠️' },
 ];
 
-// ==================== 金融定数 ====================
-const INTEREST_RATE_30SEC = 0.001;
-const INTEREST_INTERVAL = 30000;
-const LOAN_INTEREST_RATE = 0.001;
-const LOAN_INTERVAL = 1800000;
+// ==================== 金融定数（変更済み）====================
+// 銀行：30分ごとに0.1%
+const INTEREST_RATE_30MIN = 0.001;
+const INTEREST_INTERVAL = 1800000; // 30分
 
-// ==================== ニュース投稿ユーティリティ ====================
+// ローン：15分ごとに0.3%
+const LOAN_INTEREST_RATE = 0.003;
+const LOAN_INTERVAL = 900000; // 15分
+
+// ==================== ニュースを投稿するユーティリティ ====================
 async function postNews(db, appId, message, type = 'info') {
   try {
     const newsRef = collection(db, 'artifacts', appId, 'public', 'data', 'news');
     await addDoc(newsRef, { message, type, createdAt: Date.now() });
   } catch (e) { console.error('news post error', e); }
-}
-
-// ==================== カード定数（ブラックジャック・ポーカー共用） ====================
-const SUITS = ['♠', '♥', '♦', '♣'];
-const RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
-const SUIT_COLORS = { '♠': 'text-gray-100', '♥': 'text-red-400', '♦': 'text-red-400', '♣': 'text-gray-100' };
-
-function createDeck(count = 1) {
-  const deck = [];
-  for (let d = 0; d < count; d++) {
-    for (const suit of SUITS) {
-      for (const rank of RANKS) {
-        deck.push({ suit, rank });
-      }
-    }
-  }
-  return deck.sort(() => Math.random() - 0.5);
-}
-
-function cardValue(rank) {
-  if (['J', 'Q', 'K'].includes(rank)) return 10;
-  if (rank === 'A') return 11;
-  return parseInt(rank);
-}
-
-function handTotal(cards) {
-  let total = 0, aces = 0;
-  for (const c of cards) {
-    total += cardValue(c.rank);
-    if (c.rank === 'A') aces++;
-  }
-  while (total > 21 && aces > 0) { total -= 10; aces--; }
-  return total;
-}
-
-// ==================== トランプカード描画コンポーネント ====================
-function PlayingCard({ card, hidden = false, small = false }) {
-  const sizeClass = small ? 'w-10 h-14 text-xs' : 'w-14 h-20 text-sm md:w-16 md:h-24 md:text-base';
-  if (hidden) {
-    return (
-      <div className={`${sizeClass} rounded-lg border-2 border-gray-600 bg-gradient-to-br from-blue-900 to-blue-950 flex items-center justify-center shadow-xl`}>
-        <span className="text-2xl opacity-50">🂠</span>
-      </div>
-    );
-  }
-  const colorClass = SUIT_COLORS[card.suit];
-  return (
-    <div className={`${sizeClass} rounded-lg border-2 border-gray-500 bg-gradient-to-br from-white to-gray-100 flex flex-col justify-between p-1 shadow-xl select-none`}>
-      <div className={`font-black leading-none ${colorClass} ${small ? 'text-xs' : 'text-sm'}`}>{card.rank}<br/>{card.suit}</div>
-      <div className={`text-center font-black ${colorClass} ${small ? 'text-base' : 'text-xl'}`}>{card.suit}</div>
-      <div className={`font-black leading-none text-right rotate-180 ${colorClass} ${small ? 'text-xs' : 'text-sm'}`}>{card.rank}<br/>{card.suit}</div>
-    </div>
-  );
 }
 
 // ==================== メインApp ====================
@@ -180,6 +130,7 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // プレイヤーデータ購読
   useEffect(() => {
     if (!user || !playerName) return;
     const safeName = encodeURIComponent(playerName);
@@ -210,6 +161,7 @@ export default function App() {
     return () => unsub();
   }, [user, playerName]);
 
+  // ニュース購読（グローバル）
   useEffect(() => {
     if (!user) return;
     const newsRef = collection(db, 'artifacts', appId, 'public', 'data', 'news');
@@ -222,12 +174,13 @@ export default function App() {
     return () => unsub();
   }, [user]);
 
+  // 銀行利子（30分ごと）
   useEffect(() => {
     if (!user || !playerName || bankBalance <= 0) return;
     const timer = setInterval(() => {
       const safeName = encodeURIComponent(playerName);
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeName);
-      const interest = Math.floor(bankBalance * INTEREST_RATE_30SEC);
+      const interest = Math.floor(bankBalance * INTEREST_RATE_30MIN);
       if (interest > 0) {
         updateDoc(docRef, { bankBalance: increment(interest), lastInterestTime: Date.now() });
         showToast(`🏦 銀行利子 +${interest.toLocaleString()} G！`, 'success');
@@ -236,6 +189,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [user, playerName, bankBalance]);
 
+  // ローン利息（15分ごと）
   useEffect(() => {
     if (!user || !playerName || loanBalance <= 0) return;
     const timer = setInterval(() => {
@@ -250,6 +204,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [user, playerName, loanBalance]);
 
+  // ランキング購読
   useEffect(() => {
     if (!user || (view !== 'RANKING' && view !== 'MENU')) return;
     const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
@@ -278,7 +233,7 @@ export default function App() {
     if (diff >= INTEREST_INTERVAL && (data.bankBalance || 0) > 0) {
       const periods = Math.floor(diff / INTEREST_INTERVAL);
       let bank = data.bankBalance, total = 0;
-      for (let i = 0; i < periods; i++) { const int = Math.floor(bank * INTEREST_RATE_30SEC); total += int; bank += int; }
+      for (let i = 0; i < periods; i++) { const int = Math.floor(bank * INTEREST_RATE_30MIN); total += int; bank += int; }
       if (total > 0) {
         await updateDoc(docRef, { bankBalance: increment(total), lastInterestTime: now });
         showToast(`🏦 不在中に利子 +${total.toLocaleString()} G！`, 'success');
@@ -329,7 +284,9 @@ export default function App() {
       const snap = await getDoc(docRef);
       if (snap.exists()) {
         const data = snap.data();
-        if (data.password && data.password !== inputPassword) { showToast("パスワードが違います！", 'error'); return; }
+        if (data.password && data.password !== inputPassword) {
+          showToast("パスワードが違います！", 'error'); return;
+        }
         if (!data.password) await updateDoc(docRef, { password: inputPassword });
       }
     } catch(e) { console.error(e); }
@@ -352,7 +309,9 @@ export default function App() {
       if (balance < amount) { showToast("所持金が足りません！", 'error'); return; }
       const creditBonus = amount >= 50000 ? 3 : amount >= 10000 ? 1 : 0;
       await updateDoc(docRef, {
-        balance: increment(-amount), bankBalance: increment(amount), lastInterestTime: Date.now(),
+        balance: increment(-amount),
+        bankBalance: increment(amount),
+        lastInterestTime: Date.now(),
         ...(creditBonus > 0 ? { creditScore: increment(creditBonus) } : {})
       });
       showToast(`🏦 ${amount.toLocaleString()} G 預け入れました。${creditBonus > 0 ? ` 信用度 +${creditBonus}` : ''}`, 'success');
@@ -368,14 +327,22 @@ export default function App() {
     const amount = parseInt(loanInput);
     if (isNaN(amount) || amount <= 0) { showToast("有効な数値を入力してください。", 'error'); return; }
     const maxLoan = Math.floor(creditScore * 1000);
-    if (loanBalance + amount > maxLoan) { showToast(`上限 ${maxLoan.toLocaleString()} G まで借りられます！`, 'error'); return; }
+    if (loanBalance + amount > maxLoan) {
+      showToast(`上限 ${maxLoan.toLocaleString()} G まで借りられます！`, 'error'); return;
+    }
     const safeName = encodeURIComponent(playerName);
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeName);
-    await updateDoc(docRef, { balance: increment(amount), loanBalance: increment(amount), lastLoanTime: Date.now(), creditScore: increment(-5) });
+    await updateDoc(docRef, {
+      balance: increment(amount),
+      loanBalance: increment(amount),
+      lastLoanTime: Date.now(),
+      creditScore: increment(-5)
+    });
     showToast(`💰 ${amount.toLocaleString()} G 借入しました。信用度 -5`, 'warning');
     setLoanInput('');
   };
 
+  // ローン返済：信用度 -15（変更）
   const handleRepay = async () => {
     const amount = parseInt(loanInput);
     if (isNaN(amount) || amount <= 0) { showToast("有効な数値を入力してください。", 'error'); return; }
@@ -383,10 +350,12 @@ export default function App() {
     if (loanBalance < amount) { showToast("返済額がローン残高を超えています！", 'error'); return; }
     const safeName = encodeURIComponent(playerName);
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeName);
-    const isFullRepay = amount >= loanBalance;
-    const creditBonus = isFullRepay ? 10 : 3;
-    await updateDoc(docRef, { balance: increment(-amount), loanBalance: increment(-amount), creditScore: increment(creditBonus) });
-    showToast(`✅ ${amount.toLocaleString()} G 返済！信用度 +${creditBonus}`, 'success');
+    await updateDoc(docRef, {
+      balance: increment(-amount),
+      loanBalance: increment(-amount),
+      creditScore: increment(-15)
+    });
+    showToast(`✅ ${amount.toLocaleString()} G 返済！信用度 -15`, 'warning');
     setLoanInput('');
   };
 
@@ -415,16 +384,23 @@ export default function App() {
         await postNews(db, appId, `💸 ${playerName} → ${target} への大口送金 ${amount.toLocaleString()} G が執行された！`, 'transfer');
       }
       showToast(`💸 ${target} へ ${amount.toLocaleString()} G 送金！`, 'success');
-      setTransferTarget(''); setTransferAmount('');
+      setTransferTarget(''); setTransferAmount(''); setView('MENU');
     } catch(e) { showToast("送金エラー", 'error'); }
   };
 
-  const emitNews = useCallback((msg, type) => { postNews(db, appId, msg, type); }, []);
+  const emitNews = useCallback((msg, type) => {
+    postNews(db, appId, msg, type);
+  }, []);
 
   const getCreditColor = s => s >= 150 ? 'text-emerald-400' : s >= 100 ? 'text-yellow-400' : s >= 50 ? 'text-orange-400' : 'text-red-400';
   const getCreditLabel = s => s >= 150 ? 'AAA' : s >= 120 ? 'AA' : s >= 100 ? 'A' : s >= 80 ? 'BBB' : s >= 60 ? 'BB' : s >= 40 ? 'B' : 'CCC';
 
-  const toastColors = { info: 'bg-yellow-500 text-black', success: 'bg-emerald-500 text-white', error: 'bg-red-500 text-white', warning: 'bg-orange-500 text-white' };
+  const toastColors = {
+    info: 'bg-yellow-500 text-black',
+    success: 'bg-emerald-500 text-white',
+    error: 'bg-red-500 text-white',
+    warning: 'bg-orange-500 text-white'
+  };
 
   const formatTime = (ts) => {
     const d = new Date(ts);
@@ -432,8 +408,15 @@ export default function App() {
   };
 
   const newsTypeStyle = {
-    info: 'text-blue-400', success: 'text-emerald-400', warning: 'text-orange-400', error: 'text-red-400',
-    jackpot: 'text-yellow-300 font-black', transfer: 'text-purple-400', mining: 'text-amber-400', loss: 'text-red-400',
+    info: 'text-blue-400',
+    success: 'text-emerald-400',
+    warning: 'text-orange-400',
+    error: 'text-red-400',
+    jackpot: 'text-yellow-300 font-black',
+    transfer: 'text-purple-400',
+    mining: 'text-amber-400',
+    loss: 'text-red-400',
+    janken: 'text-pink-400',
   };
 
   if (loadingMsg) return (
@@ -525,7 +508,6 @@ export default function App() {
 
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
               <div className="xl:col-span-2 space-y-5">
-
                 {/* カジノ */}
                 <div>
                   <p className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">🎰 カジノ</p>
@@ -560,23 +542,24 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* オンラインゲーム（NEW） */}
+                {/* 対戦 */}
                 <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">🃏 オンラインゲーム</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">🤜 オンライン対戦</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <button onClick={() => setView('BLACKJACK')} className="group relative overflow-hidden bg-gradient-to-br from-green-950 to-emerald-950 p-6 rounded-3xl shadow-2xl border border-green-500/20 hover:border-green-500/40 transition-all transform hover:-translate-y-1 text-left">
-                      <div className="absolute top-0 right-0 -mt-2 -mr-2 text-green-500/10 group-hover:text-green-400/20 transition-all duration-500 text-8xl font-black select-none">21</div>
-                      <span className="bg-green-500/10 text-green-300 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 inline-block">Card Game</span>
-                      <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-green-300 transition">BLACKJACK</h2>
-                      <p className="text-gray-400 text-sm">21を目指せ・ブラックジャックで1.5倍</p>
+                    <button onClick={() => setView('JANKEN')} className="group relative overflow-hidden bg-gradient-to-br from-pink-950 to-rose-950 p-6 rounded-3xl shadow-2xl border border-pink-500/20 hover:border-pink-500/40 transition-all transform hover:-translate-y-1 text-left">
+                      <div className="absolute top-0 right-0 -mt-4 -mr-4 text-pink-500/10 group-hover:text-pink-400/20 transition-all duration-500">
+                        <span className="text-9xl select-none">✊</span>
+                      </div>
+                      <span className="bg-pink-500/10 text-pink-300 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 inline-block">Online Battle</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-pink-300 transition">オンラインじゃんけん</h2>
+                      <p className="text-gray-400 text-sm">ルーム制・2人対戦・チャットあり</p>
                     </button>
-
-                    <button onClick={() => setView('POKER')} className="group relative overflow-hidden bg-gradient-to-br from-red-950 to-rose-950 p-6 rounded-3xl shadow-2xl border border-red-500/20 hover:border-red-500/40 transition-all transform hover:-translate-y-1 text-left">
-                      <div className="absolute top-0 right-0 -mt-4 -mr-4 text-red-500/10 group-hover:text-red-400/20 transition-all duration-500 text-9xl font-black select-none">♠</div>
-                      <span className="bg-red-500/10 text-red-300 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 inline-block">Card Game</span>
-                      <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-red-300 transition">TEXAS POKER</h2>
-                      <p className="text-gray-400 text-sm">テキサスホールデム・対ディーラー戦</p>
-                    </button>
+                    <div className="relative overflow-hidden bg-gradient-to-br from-gray-900 to-gray-950 p-6 rounded-3xl shadow-2xl border border-gray-800 text-left opacity-40 cursor-not-allowed select-none">
+                      <div className="absolute top-0 right-0 -mt-4 -mr-4 text-gray-700"><Briefcase size={110} /></div>
+                      <span className="bg-gray-700/50 text-gray-500 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 inline-block">Coming Soon</span>
+                      <h2 className="text-xl font-extrabold text-gray-600 mb-1">？？？</h2>
+                      <p className="text-gray-700 text-sm">準備中...</p>
+                    </div>
                   </div>
                 </div>
 
@@ -644,20 +627,44 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 右：ニュースのみ */}
+              {/* 右：ニュース + 送受金履歴 */}
               <div className="space-y-4">
                 <div className="bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
                   <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 bg-gray-900">
                     <Newspaper size={16} className="text-yellow-400" />
                     <span className="text-yellow-400 font-black text-sm tracking-widest">CASINO NEWS</span>
                   </div>
-                  <div className="h-96 overflow-y-auto p-3 space-y-2 scrollbar-hide">
+                  <div className="h-64 overflow-y-auto p-3 space-y-2 scrollbar-hide">
                     {newsItems.length === 0 ? (
                       <p className="text-gray-600 text-xs text-center py-8">ニュースはまだありません</p>
                     ) : newsItems.map(item => (
                       <div key={item.id} className="flex gap-2 text-xs">
                         <span className="text-gray-600 shrink-0">{formatTime(item.createdAt)}</span>
                         <span className={newsTypeStyle[item.type] || 'text-gray-300'}>{item.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
+                  <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 bg-gray-900">
+                    <History size={16} className="text-blue-400" />
+                    <span className="text-blue-400 font-black text-sm tracking-widest">送受金履歴</span>
+                  </div>
+                  <div className="h-52 overflow-y-auto p-3 space-y-2">
+                    {transferHistory.length === 0 ? (
+                      <p className="text-gray-600 text-xs text-center py-8">履歴はまだありません</p>
+                    ) : transferHistory.slice(0, 20).map((h, i) => (
+                      <div key={i} className={`flex justify-between items-center text-xs p-2 rounded-lg ${h.type === 'SENT' ? 'bg-red-500/5 border border-red-500/10' : 'bg-emerald-500/5 border border-emerald-500/10'}`}>
+                        <div>
+                          <span className={`font-bold ${h.type === 'SENT' ? 'text-red-400' : 'text-emerald-400'}`}>
+                            {h.type === 'SENT' ? `→ ${h.to}` : `← ${h.from}`}
+                          </span>
+                          <span className="text-gray-600 ml-2">{formatTime(h.at)}</span>
+                        </div>
+                        <span className={`font-mono font-black ${h.type === 'SENT' ? 'text-red-400' : 'text-emerald-400'}`}>
+                          {h.type === 'SENT' ? '-' : '+'}{h.amount.toLocaleString()}G
+                        </span>
                       </div>
                     ))}
                   </div>
@@ -671,8 +678,7 @@ export default function App() {
         {view === 'RACE' && HORSE_RACING_EVENT_ACTIVE && <HorseRacing balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
         {view === 'LABOR' && <LaborView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} />}
         {view === 'MINING' && <MiningView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
-        {view === 'BLACKJACK' && <BlackjackView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
-        {view === 'POKER' && <TexasPokerView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
+        {view === 'JANKEN' && <JankenView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} db={db} appId={appId} />}
 
         {/* ===== BANK ===== */}
         {view === 'BANK' && (
@@ -683,7 +689,7 @@ export default function App() {
                 <div className="p-4 bg-emerald-500/10 rounded-2xl text-emerald-400"><Landmark size={32} /></div>
                 <div>
                   <h2 className="text-3xl font-black text-white">GRAND BANK</h2>
-                  <p className="text-sm text-emerald-400 font-semibold">預金: 30秒 +0.1% ／ ローン: 30分 +0.1%</p>
+                  <p className="text-sm text-emerald-400 font-semibold">預金: 30分 +0.1% ／ ローン: 15分 +0.3%</p>
                 </div>
               </div>
               <div className="bg-gray-950 p-5 rounded-2xl border border-gray-800 mb-4">
@@ -704,12 +710,11 @@ export default function App() {
                   <p className="text-gray-400 font-bold mb-1">📈 信用度UP</p>
                   <p className="text-emerald-400">・1万G以上預金 <span className="text-white font-bold">+1</span></p>
                   <p className="text-emerald-400">・5万G以上預金 <span className="text-white font-bold">+3</span></p>
-                  <p className="text-emerald-400">・ローン返済 <span className="text-white font-bold">+3</span></p>
-                  <p className="text-emerald-400">・全額一括返済 <span className="text-white font-bold">+10</span></p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-gray-400 font-bold mb-1">📉 信用度DOWN</p>
                   <p className="text-red-400">・ローン借入 <span className="text-white font-bold">-5</span></p>
+                  <p className="text-red-400">・ローン返済 <span className="text-white font-bold">-15</span></p>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3 mb-6">
@@ -746,15 +751,15 @@ export default function App() {
                 </div>
                 <div className="flex gap-3">
                   <button onClick={handleLoan} className="flex-1 bg-red-700 hover:bg-red-600 text-white py-3 rounded-xl font-black transition active:scale-95">借入する（信用度-5）</button>
-                  <button onClick={handleRepay} disabled={loanBalance <= 0} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white py-3 rounded-xl font-black transition active:scale-95 disabled:opacity-40">返済する（信用度UP）</button>
+                  <button onClick={handleRepay} disabled={loanBalance <= 0} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white py-3 rounded-xl font-black transition active:scale-95 disabled:opacity-40">返済する（信用度-15）</button>
                 </div>
-                <p className="text-xs text-gray-600 mt-3 text-center">※借入は30分毎0.1%利息。高額預金で信用度UP・借入で信用度DOWN</p>
+                <p className="text-xs text-gray-600 mt-3 text-center">※借入は15分毎0.3%利息・預金は30分毎0.1%利息</p>
               </div>
             </div>
           </div>
         )}
 
-        {/* ===== TRANSFER（送金履歴を統合） ===== */}
+        {/* ===== TRANSFER ===== */}
         {view === 'TRANSFER' && (
           <div className="p-6 md:p-12 max-w-2xl mx-auto">
             <button onClick={() => setView('MENU')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
@@ -785,34 +790,9 @@ export default function App() {
                   </div>
                 </div>
               </div>
-              <button onClick={handleTransfer} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-black transition active:scale-95 text-lg flex items-center justify-center gap-2 mb-8">
+              <button onClick={handleTransfer} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-4 rounded-xl font-black transition active:scale-95 text-lg flex items-center justify-center gap-2">
                 <Send size={20} /> 安全に送金を実行する
               </button>
-
-              {/* 送受金履歴（統合） */}
-              <div className="border-t border-gray-800 pt-6">
-                <div className="flex items-center gap-2 mb-4">
-                  <History size={16} className="text-blue-400" />
-                  <span className="text-blue-400 font-black text-sm tracking-widest">送受金履歴</span>
-                </div>
-                <div className="space-y-2 max-h-72 overflow-y-auto">
-                  {transferHistory.length === 0 ? (
-                    <p className="text-gray-600 text-xs text-center py-6">履歴はまだありません</p>
-                  ) : transferHistory.slice(0, 20).map((h, i) => (
-                    <div key={i} className={`flex justify-between items-center text-xs p-2.5 rounded-lg ${h.type === 'SENT' ? 'bg-red-500/5 border border-red-500/10' : 'bg-emerald-500/5 border border-emerald-500/10'}`}>
-                      <div>
-                        <span className={`font-bold ${h.type === 'SENT' ? 'text-red-400' : 'text-emerald-400'}`}>
-                          {h.type === 'SENT' ? `→ ${h.to}` : `← ${h.from}`}
-                        </span>
-                        <span className="text-gray-600 ml-2">{formatTime(h.at)}</span>
-                      </div>
-                      <span className={`font-mono font-black ${h.type === 'SENT' ? 'text-red-400' : 'text-emerald-400'}`}>
-                        {h.type === 'SENT' ? '-' : '+'}{h.amount.toLocaleString()}G
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
             </div>
           </div>
         )}
@@ -869,7 +849,548 @@ export default function App() {
 }
 
 // ==========================================
-// Component: Slot Machine（変更なし）
+// Component: Janken (オンラインじゃんけん)
+// ==========================================
+function JankenView({ balance, updateBalance, onBack, showToast, playerName, emitNews, db, appId }) {
+  const JANKEN_HANDS = [
+    { id: 'rock', label: 'グー', emoji: '✊', beats: 'scissors' },
+    { id: 'scissors', label: 'チョキ', emoji: '✌️', beats: 'paper' },
+    { id: 'paper', label: 'パー', emoji: '🖐️', beats: 'rock' },
+  ];
+
+  const [phase, setPhase] = useState('LOBBY'); // LOBBY | ROOM | PLAYING | RESULT
+  const [rooms, setRooms] = useState([]);
+  const [currentRoom, setCurrentRoom] = useState(null);
+  const [roomId, setRoomId] = useState(null);
+  const [myHand, setMyHand] = useState(null);
+  const [timeLeft, setTimeLeft] = useState(30);
+  const [chatInput, setChatInput] = useState('');
+  const [chatMessages, setChatMessages] = useState([]);
+  const [betAmount, setBetAmount] = useState(100);
+  const [createBet, setCreateBet] = useState(100);
+  const [gameResult, setGameResult] = useState(null);
+  const [isHost, setIsHost] = useState(false);
+  const [opponentName, setOpponentName] = useState('');
+  const [handLocked, setHandLocked] = useState(false);
+
+  const timerRef = useRef(null);
+  const roomUnsubRef = useRef(null);
+  const chatUnsubRef = useRef(null);
+
+  const roomsRef = collection(db, 'artifacts', appId, 'public', 'data', 'jankenRooms');
+
+  // ルーム一覧購読
+  useEffect(() => {
+    if (phase !== 'LOBBY') return;
+    const q = query(roomsRef, orderBy('createdAt', 'desc'), limit(10));
+    const unsub = onSnapshot(q, snap => {
+      const list = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      setRooms(list);
+    });
+    return () => unsub();
+  }, [phase]);
+
+  // ルーム購読
+  useEffect(() => {
+    if (!roomId) return;
+    const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId);
+    const unsub = onSnapshot(rRef, snap => {
+      if (!snap.exists()) {
+        // ルームが消えた
+        leaveRoom();
+        return;
+      }
+      const data = snap.data();
+      setCurrentRoom(data);
+
+      // 相手が参加した
+      if (data.guest && data.host !== playerName) {
+        setOpponentName(data.host);
+      } else if (data.guest && data.host === playerName) {
+        setOpponentName(data.guest);
+      }
+
+      // 両方の手が揃ったら結果フェーズへ
+      if (data.hostHand && data.guestHand && phase !== 'RESULT') {
+        resolveGame(data);
+      }
+    });
+    roomUnsubRef.current = unsub;
+    return () => unsub();
+  }, [roomId, phase]);
+
+  // チャット購読
+  useEffect(() => {
+    if (!roomId) return;
+    const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId, 'chat');
+    const q = query(chatRef, orderBy('createdAt', 'asc'), limit(50));
+    const unsub = onSnapshot(q, snap => {
+      const msgs = [];
+      snap.forEach(d => msgs.push({ id: d.id, ...d.data() }));
+      setChatMessages(msgs);
+    });
+    chatUnsubRef.current = unsub;
+    return () => unsub();
+  }, [roomId]);
+
+  // タイマー（PLAYING フェーズ）
+  useEffect(() => {
+    if (phase !== 'PLAYING') return;
+    setTimeLeft(30);
+    timerRef.current = setInterval(() => {
+      setTimeLeft(t => {
+        if (t <= 1) {
+          clearInterval(timerRef.current);
+          // 時間切れ：手を選んでなければランダム
+          if (!handLocked) {
+            const random = JANKEN_HANDS[Math.floor(Math.random() * 3)];
+            submitHand(random.id, true);
+          }
+          return 0;
+        }
+        return t - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [phase]);
+
+  const createRoom = async () => {
+    if (createBet <= 0 || createBet > balance) {
+      showToast("ベット額が不正です。", 'error'); return;
+    }
+    try {
+      const rRef = doc(roomsRef);
+      await setDoc(rRef, {
+        host: playerName,
+        guest: null,
+        hostHand: null,
+        guestHand: null,
+        bet: createBet,
+        status: 'WAITING', // WAITING | PLAYING | DONE
+        createdAt: Date.now(),
+        hostReady: false,
+        guestReady: false,
+      });
+      setRoomId(rRef.id);
+      setIsHost(true);
+      setPhase('ROOM');
+      showToast(`ルームを作成しました！`, 'success');
+    } catch(e) { showToast("ルーム作成エラー", 'error'); }
+  };
+
+  const joinRoom = async (room) => {
+    if (room.guest) { showToast("このルームは満員です。", 'error'); return; }
+    if (room.host === playerName) { showToast("自分のルームには入れません。", 'error'); return; }
+    if (room.bet > balance) { showToast(`ベット額 ${room.bet.toLocaleString()} G が足りません。`, 'error'); return; }
+    try {
+      const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', room.id);
+      await updateDoc(rRef, { guest: playerName, status: 'PLAYING' });
+      setRoomId(room.id);
+      setBetAmount(room.bet);
+      setIsHost(false);
+      setOpponentName(room.host);
+      setPhase('ROOM');
+      showToast(`ルームに参加しました！`, 'success');
+    } catch(e) { showToast("参加エラー", 'error'); }
+  };
+
+  const startGame = async () => {
+    if (!currentRoom?.guest) { showToast("相手の参加を待っています...", 'info'); return; }
+    setMyHand(null);
+    setHandLocked(false);
+    setGameResult(null);
+    const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId);
+    await updateDoc(rRef, { hostHand: null, guestHand: null, status: 'PLAYING' });
+    setPhase('PLAYING');
+  };
+
+  const guestStartGame = async () => {
+    setMyHand(null);
+    setHandLocked(false);
+    setGameResult(null);
+    setPhase('PLAYING');
+  };
+
+  const submitHand = async (handId, isTimeout = false) => {
+    if (handLocked && !isTimeout) return;
+    setMyHand(handId);
+    setHandLocked(true);
+    clearInterval(timerRef.current);
+    const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId);
+    const field = isHost ? 'hostHand' : 'guestHand';
+    await updateDoc(rRef, { [field]: handId });
+    if (!isTimeout) showToast(`${JANKEN_HANDS.find(h => h.id === handId)?.emoji} を出しました！`, 'info');
+    else showToast(`⏰ 時間切れ！ランダムで出しました`, 'warning');
+  };
+
+  const resolveGame = async (data) => {
+    if (phase === 'RESULT') return;
+    const hh = data.hostHand;
+    const gh = data.guestHand;
+    const myHand = isHost ? hh : gh;
+    const opHand = isHost ? gh : hh;
+    const myHandData = JANKEN_HANDS.find(h => h.id === myHand);
+    const opHandData = JANKEN_HANDS.find(h => h.id === opHand);
+
+    let result = 'DRAW';
+    if (myHandData && opHandData) {
+      if (myHandData.beats === opHand) result = 'WIN';
+      else if (opHandData.beats === myHand) result = 'LOSE';
+    }
+
+    const bet = data.bet || 0;
+    let winAmount = 0;
+    if (result === 'WIN') {
+      winAmount = bet * 2;
+      await updateBalance(winAmount);
+      await updateBalance(-bet); // 自分のベット分は別途引かれるので相殺のため
+      // 実際には相手から奪う形：勝者に2bet支払い（双方がbetを出す）
+      // シンプルに：勝ちは+bet、負けは-bet、引き分けは0
+      await updateBalance(bet); // WIN: +bet
+    } else if (result === 'LOSE') {
+      await updateBalance(-bet);
+    }
+
+    const oppName = isHost ? data.guest : data.host;
+    const handLabel = myHandData?.label || '？';
+    const opLabel = opHandData?.label || '？';
+
+    if (result === 'WIN') {
+      emitNews(`✊ ${playerName} が ${oppName} とのじゃんけんで勝利！ +${bet.toLocaleString()} G！`, 'janken');
+    }
+
+    setGameResult({ result, myHand, opHand, myLabel: handLabel, opLabel, bet });
+    setPhase('RESULT');
+
+    // ルームステータスをDONEに
+    try {
+      const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId);
+      await updateDoc(rRef, { status: 'DONE' });
+    } catch(e) {}
+  };
+
+  const leaveRoom = async () => {
+    if (roomUnsubRef.current) roomUnsubRef.current();
+    if (chatUnsubRef.current) chatUnsubRef.current();
+    // ホストがルーム削除
+    if (isHost && roomId) {
+      try {
+        const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId);
+        await deleteDoc(rRef);
+      } catch(e) {}
+    }
+    setRoomId(null);
+    setCurrentRoom(null);
+    setMyHand(null);
+    setHandLocked(false);
+    setGameResult(null);
+    setIsHost(false);
+    setOpponentName('');
+    setChatMessages([]);
+    setPhase('LOBBY');
+    clearInterval(timerRef.current);
+  };
+
+  const sendChat = async () => {
+    if (!chatInput.trim() || !roomId) return;
+    const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId, 'chat');
+    await addDoc(chatRef, {
+      sender: playerName,
+      message: chatInput.trim(),
+      createdAt: Date.now(),
+    });
+    setChatInput('');
+  };
+
+  const rematch = async () => {
+    if (!currentRoom) return;
+    setMyHand(null);
+    setHandLocked(false);
+    setGameResult(null);
+    const rRef = doc(db, 'artifacts', appId, 'public', 'data', 'jankenRooms', roomId);
+    await updateDoc(rRef, { hostHand: null, guestHand: null, status: 'PLAYING' });
+    setPhase('PLAYING');
+  };
+
+  const formatChatTime = (ts) => {
+    const d = new Date(ts);
+    return `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}`;
+  };
+
+  // ロビー画面
+  if (phase === 'LOBBY') return (
+    <div className="p-4 md:p-8 max-w-3xl mx-auto">
+      <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
+
+      <div className="text-center mb-8">
+        <h2 className="text-4xl font-black text-white mb-2 flex items-center justify-center gap-3">
+          <span className="text-4xl">✊</span> オンラインじゃんけん <span className="text-4xl">✌️</span>
+        </h2>
+        <p className="text-gray-400">リアルタイム2人対戦 · 30秒制限 · チャットあり</p>
+      </div>
+
+      {/* ルーム作成 */}
+      <div className="bg-gradient-to-br from-pink-950 to-rose-950 border border-pink-500/30 rounded-3xl p-6 mb-6 shadow-2xl">
+        <h3 className="text-lg font-black text-white mb-4 flex items-center gap-2">🆕 新しいルームを作る</h3>
+        <div className="flex gap-3 items-center mb-4">
+          <div className="flex-1">
+            <label className="text-xs text-gray-400 font-bold block mb-1">賭け金額 (G)</label>
+            <input type="number" value={createBet} onChange={e => setCreateBet(Number(e.target.value))}
+              className="w-full bg-gray-950 text-white font-mono text-xl p-3 rounded-xl border border-gray-800 focus:outline-none focus:border-pink-500"
+              min="10" step="10" />
+          </div>
+          <div className="text-gray-500 text-sm pt-5">
+            <div>所持金: <span className="text-yellow-400 font-bold">{balance.toLocaleString()} G</span></div>
+            <div className="text-xs">勝てば +{createBet.toLocaleString()} G</div>
+            <div className="text-xs">負けると -{createBet.toLocaleString()} G</div>
+          </div>
+        </div>
+        <button onClick={createRoom} disabled={createBet <= 0 || createBet > balance}
+          className="w-full bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-black py-3 rounded-xl transition disabled:opacity-40 disabled:cursor-not-allowed active:scale-95">
+          ルームを作成する
+        </button>
+      </div>
+
+      {/* ルーム一覧 */}
+      <div className="bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden shadow-xl">
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 bg-gray-900">
+          <span className="text-pink-400 font-black text-sm tracking-widest">🔍 参加可能なルーム</span>
+          <span className="ml-auto text-xs text-gray-500">{rooms.filter(r => !r.guest && r.status === 'WAITING').length} 件</span>
+        </div>
+        <div className="p-3 space-y-2 min-h-[80px]">
+          {rooms.filter(r => !r.guest && r.status === 'WAITING' && r.host !== playerName).length === 0 ? (
+            <p className="text-gray-600 text-sm text-center py-6">現在参加できるルームはありません</p>
+          ) : rooms.filter(r => !r.guest && r.status === 'WAITING' && r.host !== playerName).map(room => (
+            <div key={room.id} className="flex items-center justify-between bg-gray-950 p-4 rounded-xl border border-gray-800 hover:border-pink-500/30 transition">
+              <div>
+                <span className="text-white font-bold">{room.host}</span>
+                <span className="text-gray-500 text-xs ml-2">のルーム</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <span className="text-yellow-400 font-mono font-black">{room.bet?.toLocaleString()} G</span>
+                <button onClick={() => joinRoom(room)}
+                  className="bg-pink-600 hover:bg-pink-500 text-white text-sm font-black px-4 py-2 rounded-lg transition active:scale-95">
+                  参加する
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+  // ルーム待機 / ゲーム中 / 結果
+  return (
+    <div className="p-4 md:p-6 max-w-4xl mx-auto">
+      <div className="flex justify-between items-center mb-6">
+        <button onClick={leaveRoom} className="flex items-center gap-2 text-gray-400 hover:text-white transition text-sm">
+          <ArrowLeft size={18} /> {isHost ? 'ルームを解散' : 'ルームを退出'}
+        </button>
+        <div className="text-sm text-gray-400">
+          賭け金: <span className="text-yellow-400 font-black">{(currentRoom?.bet || betAmount).toLocaleString()} G</span>
+        </div>
+        <div className="bg-gray-900/95 px-4 py-2 rounded-full border border-gray-800 font-mono text-lg text-yellow-500 font-bold">
+          {balance.toLocaleString()} G
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        {/* メインゲームエリア */}
+        <div className="lg:col-span-2">
+
+          {/* ROOM WAITING */}
+          {phase === 'ROOM' && (
+            <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 p-8 text-center">
+              <h3 className="text-2xl font-black text-white mb-2">🎮 ルーム待機中</h3>
+              <div className="bg-gray-950 rounded-2xl p-6 mb-6 border border-gray-800">
+                <div className="flex justify-around items-center">
+                  <div className="text-center">
+                    <div className="w-16 h-16 bg-pink-500/20 rounded-full flex items-center justify-center mx-auto mb-2">
+                      <span className="text-2xl">👤</span>
+                    </div>
+                    <div className="text-white font-bold">{isHost ? playerName : currentRoom?.host || '...'}</div>
+                    <div className="text-xs text-pink-400">HOST</div>
+                  </div>
+                  <div className="text-4xl text-gray-600">VS</div>
+                  <div className="text-center">
+                    <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-2 ${currentRoom?.guest ? 'bg-blue-500/20' : 'bg-gray-800 animate-pulse'}`}>
+                      <span className="text-2xl">{currentRoom?.guest ? '👤' : '⏳'}</span>
+                    </div>
+                    <div className={`font-bold ${currentRoom?.guest ? 'text-white' : 'text-gray-600'}`}>
+                      {currentRoom?.guest || '待機中...'}
+                    </div>
+                    <div className="text-xs text-blue-400">GUEST</div>
+                  </div>
+                </div>
+              </div>
+              <div className="text-yellow-400 font-bold text-xl mb-6">賭け金: {(currentRoom?.bet || 0).toLocaleString()} G</div>
+
+              {isHost ? (
+                <button onClick={startGame} disabled={!currentRoom?.guest}
+                  className="w-full bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-black py-4 rounded-xl text-lg transition disabled:opacity-40 disabled:cursor-not-allowed active:scale-95">
+                  {currentRoom?.guest ? '✊ ゲームスタート！' : '相手の参加を待っています...'}
+                </button>
+              ) : (
+                <button onClick={guestStartGame}
+                  className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-black py-4 rounded-xl text-lg transition active:scale-95">
+                  ✊ 準備OK！
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* PLAYING */}
+          {phase === 'PLAYING' && (
+            <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 p-6">
+              {/* タイマー */}
+              <div className="flex items-center justify-between mb-6">
+                <div className="text-white font-bold">あなた: <span className="text-pink-400">{playerName}</span></div>
+                <div className={`text-4xl font-black ${timeLeft <= 10 ? 'text-red-400 animate-pulse' : 'text-yellow-400'}`}>
+                  ⏱ {timeLeft}
+                </div>
+                <div className="text-white font-bold">相手: <span className="text-blue-400">{opponentName || '...'}</span></div>
+              </div>
+
+              {/* タイマーバー */}
+              <div className="w-full bg-gray-800 rounded-full h-3 mb-6">
+                <div
+                  className={`h-3 rounded-full transition-all duration-1000 ${timeLeft <= 10 ? 'bg-red-500' : 'bg-yellow-400'}`}
+                  style={{width: `${(timeLeft / 30) * 100}%`}}
+                />
+              </div>
+
+              <p className="text-center text-gray-400 font-bold mb-6 text-lg">
+                {handLocked ? `${JANKEN_HANDS.find(h=>h.id===myHand)?.emoji} 手を出しました！相手を待っています...` : '手を選んでください！'}
+              </p>
+
+              {/* 手の選択 */}
+              <div className="grid grid-cols-3 gap-4 mb-4">
+                {JANKEN_HANDS.map(hand => (
+                  <button key={hand.id} onClick={() => submitHand(hand.id)} disabled={handLocked}
+                    className={`
+                      flex flex-col items-center justify-center p-6 rounded-2xl border-4 transition-all transform active:scale-95 font-black text-xl
+                      ${myHand === hand.id
+                        ? 'border-yellow-400 bg-yellow-400/20 scale-105 shadow-lg shadow-yellow-400/20'
+                        : handLocked
+                          ? 'border-gray-700 bg-gray-900 opacity-40 cursor-not-allowed'
+                          : 'border-gray-700 bg-gray-900 hover:border-pink-400 hover:bg-pink-400/10 hover:-translate-y-1 cursor-pointer'
+                      }
+                    `}
+                  >
+                    <span className="text-5xl mb-2">{hand.emoji}</span>
+                    <span className="text-white">{hand.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              {handLocked && (
+                <div className="text-center text-sm text-gray-500 animate-pulse">
+                  相手の選択を待っています...
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* RESULT */}
+          {phase === 'RESULT' && gameResult && (
+            <div className={`bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border-4 p-8 text-center ${
+              gameResult.result === 'WIN' ? 'border-yellow-500' : gameResult.result === 'LOSE' ? 'border-red-500' : 'border-gray-700'
+            }`}>
+              <div className="text-7xl mb-4">
+                {gameResult.result === 'WIN' ? '🏆' : gameResult.result === 'LOSE' ? '😢' : '🤝'}
+              </div>
+              <h3 className={`text-5xl font-black mb-4 ${
+                gameResult.result === 'WIN' ? 'text-yellow-400' : gameResult.result === 'LOSE' ? 'text-red-400' : 'text-gray-400'
+              }`}>
+                {gameResult.result === 'WIN' ? '勝ち！' : gameResult.result === 'LOSE' ? '負け...' : 'あいこ！'}
+              </h3>
+
+              <div className="flex justify-center items-center gap-8 mb-6">
+                <div className="text-center">
+                  <div className="text-5xl mb-2">{JANKEN_HANDS.find(h=>h.id===gameResult.myHand)?.emoji}</div>
+                  <div className="text-pink-400 font-bold text-sm">{playerName}</div>
+                  <div className="text-white font-bold">{gameResult.myLabel}</div>
+                </div>
+                <div className="text-3xl text-gray-600 font-black">VS</div>
+                <div className="text-center">
+                  <div className="text-5xl mb-2">{JANKEN_HANDS.find(h=>h.id===gameResult.opHand)?.emoji}</div>
+                  <div className="text-blue-400 font-bold text-sm">{opponentName}</div>
+                  <div className="text-white font-bold">{gameResult.opLabel}</div>
+                </div>
+              </div>
+
+              {gameResult.result !== 'DRAW' && (
+                <div className={`text-3xl font-black mb-6 ${gameResult.result === 'WIN' ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {gameResult.result === 'WIN' ? `+${gameResult.bet.toLocaleString()} G` : `-${gameResult.bet.toLocaleString()} G`}
+                </div>
+              )}
+              {gameResult.result === 'DRAW' && (
+                <div className="text-gray-400 text-lg mb-6">引き分け（賭け金の移動なし）</div>
+              )}
+
+              <div className="flex gap-3">
+                <button onClick={rematch}
+                  className={`flex-1 text-white font-black py-4 rounded-xl text-lg transition active:scale-95 ${
+                    gameResult.result === 'WIN' ? 'bg-yellow-600 hover:bg-yellow-500' : gameResult.result === 'LOSE' ? 'bg-red-700 hover:bg-red-600' : 'bg-gray-700 hover:bg-gray-600'
+                  }`}>
+                  もう一度！
+                </button>
+                <button onClick={leaveRoom} className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-4 rounded-xl font-bold transition">
+                  ルームを出る
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* チャットエリア */}
+        <div className="bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden flex flex-col" style={{height: '480px'}}>
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-800 bg-gray-900">
+            <span className="text-pink-400 font-black text-sm tracking-widest">💬 ルームチャット</span>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {chatMessages.length === 0 ? (
+              <p className="text-gray-600 text-xs text-center py-4">チャットを始めましょう！</p>
+            ) : chatMessages.map(msg => (
+              <div key={msg.id} className={`text-xs ${msg.sender === playerName ? 'text-right' : 'text-left'}`}>
+                <div className={`inline-block max-w-[85%] px-3 py-2 rounded-2xl ${
+                  msg.sender === playerName
+                    ? 'bg-pink-600/80 text-white rounded-br-sm'
+                    : 'bg-gray-800 text-gray-200 rounded-bl-sm'
+                }`}>
+                  {msg.sender !== playerName && (
+                    <div className="text-pink-400 font-bold text-xs mb-0.5">{msg.sender}</div>
+                  )}
+                  <div>{msg.message}</div>
+                  <div className="text-xs opacity-50 mt-0.5">{formatChatTime(msg.createdAt)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="p-3 border-t border-gray-800 flex gap-2">
+            <input
+              type="text"
+              value={chatInput}
+              onChange={e => setChatInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && sendChat()}
+              placeholder="メッセージを入力..."
+              maxLength={100}
+              className="flex-1 bg-gray-950 text-white text-sm p-2 rounded-lg border border-gray-800 focus:outline-none focus:border-pink-500"
+            />
+            <button onClick={sendChat} className="bg-pink-600 hover:bg-pink-500 text-white px-3 py-2 rounded-lg transition active:scale-95">
+              <Send size={16} />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ==========================================
+// Component: Slot Machine
 // ==========================================
 function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
   const [bet, setBet] = useState(100);
@@ -884,13 +1405,21 @@ function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, em
   const [totalWin, setTotalWin] = useState(0);
   const [spinCount, setSpinCount] = useState(0);
   const [jackpotFlash, setJackpotFlash] = useState(false);
+
   const autoRef = useRef(false);
   const statusRef = useRef('IDLE');
   const animFrames = useRef([null, null, null]);
   const totalLossRef = useRef(0);
-  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+
+  const LINES = [
+    [0,1,2],[3,4,5],[6,7,8],
+    [0,3,6],[1,4,7],[2,5,8],
+    [0,4,8],[2,4,6],
+  ];
+
   const randomSymbol = () => SYMBOL_POOL[Math.floor(Math.random() * SYMBOL_POOL.length)];
   const generateFinalGrid = useCallback(() => Array(9).fill(0).map(() => randomSymbol()), []);
+
   const spinReel = useCallback((colIndex, finalSymbols, stopDelay) => {
     return new Promise(resolve => {
       const startTime = performance.now();
@@ -899,11 +1428,20 @@ function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, em
         const progress = Math.min(elapsed / stopDelay, 1);
         const speed = progress < 0.7 ? 1 : Math.max(0.1, 1 - (progress - 0.7) / 0.3);
         if (Math.floor(now / (1000 / Math.max(speed * 60, 8))) % 2 === 0) {
-          setDisplayGrid(prev => { const next = [...prev]; for (let row = 0; row < 3; row++) next[row * 3 + colIndex] = randomSymbol(); return next; });
+          setDisplayGrid(prev => {
+            const next = [...prev];
+            for (let row = 0; row < 3; row++) next[row * 3 + colIndex] = randomSymbol();
+            return next;
+          });
         }
-        if (progress < 1) { animFrames.current[colIndex] = requestAnimationFrame(tick); }
-        else {
-          setDisplayGrid(prev => { const next = [...prev]; for (let row = 0; row < 3; row++) next[row * 3 + colIndex] = finalSymbols[row * 3 + colIndex]; return next; });
+        if (progress < 1) {
+          animFrames.current[colIndex] = requestAnimationFrame(tick);
+        } else {
+          setDisplayGrid(prev => {
+            const next = [...prev];
+            for (let row = 0; row < 3; row++) next[row * 3 + colIndex] = finalSymbols[row * 3 + colIndex];
+            return next;
+          });
           setSpinningCols(prev => { const n = [...prev]; n[colIndex] = false; return n; });
           resolve();
         }
@@ -911,6 +1449,7 @@ function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, em
       animFrames.current[colIndex] = requestAnimationFrame(tick);
     });
   }, []);
+
   const startSpin = useCallback(async () => {
     if (statusRef.current !== 'IDLE') return;
     if (balance < bet) { showToast("残高が足りません！", 'error'); autoRef.current = false; setAutoSpin(false); return; }
@@ -924,7 +1463,8 @@ function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, em
     await Promise.all([0, 1, 2].map(col => spinReel(col, finalGrid, [900, 1400, 1900][col])));
     statusRef.current = 'RESULT'; setSlotStatus('RESULT');
     const grid = finalGridRef.current;
-    let totalMult = 0; const hitLines = [];
+    let totalMult = 0;
+    const hitLines = [];
     LINES.forEach(line => {
       const syms = line.map(i => SYMBOLS[grid[i]].sym);
       const match = PAYTABLE.find(p => p.combo[0] === syms[0] && p.combo[1] === syms[1] && p.combo[2] === syms[2]);
@@ -934,28 +1474,47 @@ function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, em
       const amount = bet * totalMult;
       setWinAmount(amount); setTotalWin(w => w + amount - bet);
       const top = hitLines.sort((a, b) => b.mult - a.mult)[0];
-      setWinMessage(`${top.label} ×${totalMult}`); setWinLines(hitLines);
-      await updateBalance(amount); totalLossRef.current = 0;
-      if (totalMult >= 50) setJackpotFlash(true);
-      if (amount >= 100000) emitNews(`🎰 ${playerName} がスロットで大勝ち！ ${amount.toLocaleString()} G 獲得！！`, 'jackpot');
+      setWinMessage(`${top.label} ×${totalMult}`);
+      setWinLines(hitLines);
+      await updateBalance(amount);
+      totalLossRef.current = 0;
+      if (totalMult >= 50) { setJackpotFlash(true); }
+      if (amount >= 100000) {
+        emitNews(`🎰 ${playerName} がスロットで大勝ち！ ${amount.toLocaleString()} G 獲得！！`, 'jackpot');
+      }
     } else {
-      setWinMessage('LOSE'); totalLossRef.current += bet;
-      if (totalLossRef.current >= 100000) { emitNews(`💸 ${playerName} がスロットで ${totalLossRef.current.toLocaleString()} G の大負けを記録...`, 'loss'); totalLossRef.current = 0; }
+      setWinMessage('LOSE');
+      totalLossRef.current += bet;
+      if (totalLossRef.current >= 100000) {
+        emitNews(`💸 ${playerName} がスロットで ${totalLossRef.current.toLocaleString()} G の大負けを記録...`, 'loss');
+        totalLossRef.current = 0;
+      }
       setTotalWin(w => w - bet);
     }
     const delay = autoRef.current ? (totalMult >= 30 ? 2000 : 800) : (totalMult > 0 ? 2500 : 1500);
-    setTimeout(() => { statusRef.current = 'IDLE'; setSlotStatus('IDLE'); setWinMessage(''); setWinLines([]); setJackpotFlash(false); if (autoRef.current) startSpin(); }, delay);
+    setTimeout(() => {
+      statusRef.current = 'IDLE'; setSlotStatus('IDLE');
+      setWinMessage(''); setWinLines([]); setJackpotFlash(false);
+      if (autoRef.current) startSpin();
+    }, delay);
   }, [balance, bet, updateBalance, generateFinalGrid, spinReel, playerName, emitNews]);
-  const toggleAuto = () => { const n = !autoSpin; autoRef.current = n; setAutoSpin(n); if (n && statusRef.current === 'IDLE') startSpin(); };
+
+  const toggleAuto = () => {
+    const n = !autoSpin; autoRef.current = n; setAutoSpin(n);
+    if (n && statusRef.current === 'IDLE') startSpin();
+  };
   useEffect(() => () => { animFrames.current.forEach(f => f && cancelAnimationFrame(f)); }, []);
   const isHighlighted = idx => winLines.some(wl => wl.line.includes(idx));
   const getWinGlow = idx => { const wl = winLines.find(w => w.line.includes(idx)); return wl ? wl.glow : ''; };
+
   return (
     <div className="p-4 md:p-8 max-w-4xl mx-auto flex flex-col items-center">
       {jackpotFlash && (
         <div className="fixed inset-0 z-40 pointer-events-none overflow-hidden">
           <div className="absolute inset-0 bg-yellow-500/10 animate-pulse"></div>
-          {[...Array(20)].map((_, i) => <div key={i} className="absolute text-2xl animate-bounce" style={{ left: `${Math.random() * 90}%`, top: `${Math.random() * 90}%`, animationDelay: `${Math.random() * 0.5}s` }}>⭐</div>)}
+          {[...Array(20)].map((_, i) => (
+            <div key={i} className="absolute text-2xl animate-bounce" style={{ left: `${Math.random() * 90}%`, top: `${Math.random() * 90}%`, animationDelay: `${Math.random() * 0.5}s` }}>⭐</div>
+          ))}
         </div>
       )}
       <div className="w-full flex justify-between items-center mb-6">
@@ -1036,712 +1595,7 @@ function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, em
 }
 
 // ==========================================
-// Component: Blackjack
-// ==========================================
-function BlackjackView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
-  const [deck, setDeck] = useState([]);
-  const [playerHand, setPlayerHand] = useState([]);
-  const [dealerHand, setDealerHand] = useState([]);
-  const [bet, setBet] = useState(100);
-  const [betInput, setBetInput] = useState('100');
-  const [phase, setPhase] = useState('BET'); // BET | PLAYING | DEALER | RESULT
-  const [result, setResult] = useState(''); // WIN | LOSE | PUSH | BLACKJACK
-  const [dealerRevealed, setDealerRevealed] = useState(false);
-  const [splitHands, setSplitHands] = useState(null);
-  const [splitIndex, setSplitIndex] = useState(0);
-  const [doubledDown, setDoubledDown] = useState(false);
-  const [netWin, setNetWin] = useState(0);
-
-  const freshDeck = () => createDeck(6);
-
-  const drawCard = (d) => {
-    const newDeck = [...d];
-    const card = newDeck.pop();
-    return { card, newDeck };
-  };
-
-  const startGame = async () => {
-    const betAmt = parseInt(betInput);
-    if (isNaN(betAmt) || betAmt <= 0) { showToast("有効なBET額を入力してください", 'error'); return; }
-    if (balance < betAmt) { showToast("残高が足りません！", 'error'); return; }
-    setBet(betAmt);
-    await updateBalance(-betAmt);
-
-    let d = freshDeck();
-    let { card: p1, newDeck: d1 } = drawCard(d);
-    let { card: de1, newDeck: d2 } = drawCard(d1);
-    let { card: p2, newDeck: d3 } = drawCard(d2);
-    let { card: de2, newDeck: d4 } = drawCard(d3);
-
-    const pHand = [p1, p2];
-    const dHand = [de1, de2];
-    setDeck(d4);
-    setPlayerHand(pHand);
-    setDealerHand(dHand);
-    setDealerRevealed(false);
-    setSplitHands(null);
-    setSplitIndex(0);
-    setDoubledDown(false);
-    setResult('');
-
-    // ブラックジャック判定
-    if (handTotal(pHand) === 21) {
-      if (handTotal(dHand) === 21) {
-        setDealerRevealed(true);
-        setPhase('RESULT'); setResult('PUSH');
-        await updateBalance(betAmt);
-        setNetWin(w => w + 0);
-        showToast("引き分け（PUSH）", 'info');
-      } else {
-        setDealerRevealed(true);
-        setPhase('RESULT'); setResult('BLACKJACK');
-        const win = Math.floor(betAmt * 2.5);
-        await updateBalance(win);
-        setNetWin(w => w + win - betAmt);
-        showToast(`🃏 BLACKJACK! +${(win - betAmt).toLocaleString()} G！`, 'success');
-        if (win >= 50000) emitNews(`🃏 ${playerName} がブラックジャックで ${win.toLocaleString()} G 獲得！`, 'jackpot');
-      }
-    } else {
-      setPhase('PLAYING');
-    }
-  };
-
-  const hit = async () => {
-    let { card, newDeck } = drawCard(deck);
-    setDeck(newDeck);
-    const newHand = [...playerHand, card];
-    setPlayerHand(newHand);
-    if (handTotal(newHand) > 21) {
-      setDealerRevealed(true);
-      setPhase('RESULT'); setResult('BUST');
-      setNetWin(w => w - bet);
-      showToast("バスト！負けです...", 'error');
-    }
-  };
-
-  const stand = async () => {
-    setDealerRevealed(true);
-    setPhase('DEALER');
-    // ディーラーのドロー
-    let dHand = [...dealerHand];
-    let d = [...deck];
-    while (handTotal(dHand) < 17) {
-      let { card, newDeck } = drawCard(d);
-      dHand = [...dHand, card];
-      d = newDeck;
-    }
-    setDeck(d);
-    setDealerHand(dHand);
-
-    const pTotal = handTotal(playerHand);
-    const dTotal = handTotal(dHand);
-    let res, payout = 0;
-
-    if (dTotal > 21 || pTotal > dTotal) {
-      res = 'WIN'; payout = bet * 2;
-    } else if (pTotal === dTotal) {
-      res = 'PUSH'; payout = bet;
-    } else {
-      res = 'LOSE'; payout = 0;
-    }
-
-    setResult(res);
-    setPhase('RESULT');
-    if (payout > 0) await updateBalance(payout);
-    const profit = payout - bet;
-    setNetWin(w => w + profit);
-    if (res === 'WIN') showToast(`✅ 勝利！ +${bet.toLocaleString()} G！`, 'success');
-    else if (res === 'PUSH') showToast("引き分け（PUSH）", 'info');
-    else showToast("負けです...", 'error');
-    if (payout >= 100000) emitNews(`🃏 ${playerName} がブラックジャックで ${payout.toLocaleString()} G 獲得！`, 'jackpot');
-  };
-
-  const doubleDown = async () => {
-    if (balance < bet) { showToast("残高が足りません！", 'error'); return; }
-    await updateBalance(-bet);
-    setDoubledDown(true);
-    let { card, newDeck } = drawCard(deck);
-    setDeck(newDeck);
-    const newHand = [...playerHand, card];
-    setPlayerHand(newHand);
-
-    if (handTotal(newHand) > 21) {
-      setDealerRevealed(true);
-      setPhase('RESULT'); setResult('BUST');
-      setNetWin(w => w - bet * 2);
-      showToast("バスト！（ダブル）", 'error');
-      return;
-    }
-
-    // スタンドと同じ処理
-    setDealerRevealed(true);
-    let dHand = [...dealerHand];
-    let d = [...newDeck];
-    while (handTotal(dHand) < 17) {
-      let { card: dc, newDeck: nd } = drawCard(d);
-      dHand = [...dHand, dc];
-      d = nd;
-    }
-    setDeck(d);
-    setDealerHand(dHand);
-
-    const pTotal = handTotal(newHand);
-    const dTotal = handTotal(dHand);
-    let res, payout = 0;
-    if (dTotal > 21 || pTotal > dTotal) { res = 'WIN'; payout = bet * 4; }
-    else if (pTotal === dTotal) { res = 'PUSH'; payout = bet * 2; }
-    else { res = 'LOSE'; payout = 0; }
-
-    setResult(res);
-    setPhase('RESULT');
-    if (payout > 0) await updateBalance(payout);
-    setNetWin(w => w + payout - bet * 2);
-    if (res === 'WIN') showToast(`✅ ダブルダウン勝利！ +${(bet * 2).toLocaleString()} G！`, 'success');
-    else if (res === 'PUSH') showToast("引き分け（PUSH）", 'info');
-    else showToast("ダブルダウン負け...", 'error');
-  };
-
-  const pTotal = handTotal(playerHand);
-  const dTotal = handTotal(dealerHand);
-  const canDouble = phase === 'PLAYING' && playerHand.length === 2 && balance >= bet;
-
-  const resultConfig = {
-    BLACKJACK: { label: '🃏 BLACKJACK!', color: 'text-yellow-400', bg: 'border-yellow-500 bg-yellow-500/10' },
-    WIN: { label: '✅ WIN!', color: 'text-emerald-400', bg: 'border-emerald-500 bg-emerald-500/10' },
-    PUSH: { label: '🤝 PUSH', color: 'text-blue-400', bg: 'border-blue-500 bg-blue-500/10' },
-    LOSE: { label: '❌ LOSE', color: 'text-red-400', bg: 'border-red-500 bg-red-500/10' },
-    BUST: { label: '💥 BUST!', color: 'text-red-400', bg: 'border-red-500 bg-red-500/10' },
-  };
-
-  return (
-    <div className="p-4 md:p-8 max-w-3xl mx-auto">
-      <div className="w-full flex justify-between items-center mb-6">
-        <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
-        <div className="flex items-center gap-4">
-          <div className="text-center"><div className="text-xs text-gray-500 font-bold">NET</div><div className={`font-mono font-bold ${netWin >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{netWin >= 0 ? '+' : ''}{netWin.toLocaleString()}</div></div>
-          <div className="bg-gray-900/95 px-5 py-2 rounded-full border border-gray-800 font-mono text-xl text-yellow-500 font-bold">{balance.toLocaleString()} G</div>
-        </div>
-      </div>
-
-      <div className="bg-gradient-to-b from-green-950 to-gray-950 rounded-3xl border border-green-900/50 shadow-2xl p-6">
-        {/* ディーラー */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">DEALER</span>
-            {dealerRevealed && <span className="text-lg font-black text-white">{dTotal}</span>}
-          </div>
-          <div className="flex gap-2 flex-wrap min-h-24">
-            {dealerHand.map((card, i) => (
-              <PlayingCard key={i} card={card} hidden={!dealerRevealed && i === 1} />
-            ))}
-          </div>
-        </div>
-
-        {/* 区切り */}
-        <div className="border-t border-green-900/50 mb-6"></div>
-
-        {/* プレイヤー */}
-        <div className="mb-6">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">YOU</span>
-            <span className={`text-lg font-black ${pTotal > 21 ? 'text-red-400' : pTotal === 21 ? 'text-yellow-400' : 'text-white'}`}>{pTotal}</span>
-          </div>
-          <div className="flex gap-2 flex-wrap min-h-24">
-            {playerHand.map((card, i) => (
-              <PlayingCard key={i} card={card} />
-            ))}
-          </div>
-        </div>
-
-        {/* 結果表示 */}
-        {phase === 'RESULT' && result && resultConfig[result] && (
-          <div className={`border-2 rounded-2xl p-6 text-center mb-6 ${resultConfig[result].bg}`}>
-            <div className={`text-4xl font-black mb-2 ${resultConfig[result].color}`}>{resultConfig[result].label}</div>
-            {result === 'BLACKJACK' && <div className="text-emerald-400 font-bold">BET × 1.5 獲得！</div>}
-            {result === 'WIN' && <div className="text-emerald-400 font-bold">+{bet.toLocaleString()} G 獲得！</div>}
-            {result === 'PUSH' && <div className="text-blue-300 font-bold">BETが返ってきました</div>}
-            {(result === 'LOSE' || result === 'BUST') && <div className="text-red-300 font-bold">-{bet.toLocaleString()} G</div>}
-          </div>
-        )}
-
-        {/* アクションパネル */}
-        {phase === 'BET' && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <span className="text-gray-400 font-bold text-sm shrink-0">BET額</span>
-              <input type="number" value={betInput} onChange={e => setBetInput(e.target.value)} className="flex-1 bg-gray-950 text-white font-mono text-xl p-3 rounded-xl border border-gray-800 focus:outline-none focus:border-green-500" min="10" />
-              <div className="flex gap-1">
-                {[100, 500, 1000, 5000].map(v => (
-                  <button key={v} onClick={() => setBetInput(v.toString())} className="bg-gray-800 hover:bg-gray-700 text-xs px-2 py-1.5 rounded font-bold transition">{v >= 1000 ? v/1000+'k' : v}</button>
-                ))}
-              </div>
-            </div>
-            <button onClick={startGame} disabled={balance < parseInt(betInput || 0)} className="w-full bg-gradient-to-r from-green-600 to-emerald-500 hover:from-green-500 hover:to-emerald-400 text-white font-black py-4 rounded-2xl text-xl transition-all transform hover:scale-[1.02] active:scale-95 disabled:opacity-50">
-              ディール！
-            </button>
-          </div>
-        )}
-
-        {phase === 'PLAYING' && (
-          <div className="flex flex-wrap gap-3 justify-center">
-            <button onClick={hit} className="flex-1 min-w-24 bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-2xl text-lg transition active:scale-95">
-              HIT
-            </button>
-            <button onClick={stand} className="flex-1 min-w-24 bg-red-700 hover:bg-red-600 text-white font-black py-4 rounded-2xl text-lg transition active:scale-95">
-              STAND
-            </button>
-            {canDouble && (
-              <button onClick={doubleDown} className="flex-1 min-w-24 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-4 rounded-2xl text-lg transition active:scale-95">
-                DOUBLE
-              </button>
-            )}
-          </div>
-        )}
-
-        {phase === 'RESULT' && (
-          <button onClick={() => setPhase('BET')} className="w-full bg-gray-800 hover:bg-gray-700 text-white font-black py-4 rounded-2xl text-lg transition active:scale-95">
-            次のゲームへ
-          </button>
-        )}
-      </div>
-
-      {/* ルール */}
-      <div className="mt-4 bg-gray-900/50 border border-gray-800 rounded-2xl p-4 text-xs text-gray-400 space-y-1">
-        <p className="text-gray-300 font-bold mb-2">📖 ルール</p>
-        <p>・21を超えずにディーラーより高い数字を目指す</p>
-        <p>・ブラックジャック（A＋10点札）：BET × 1.5 ボーナス</p>
-        <p>・ダブルダウン：最初の2枚のみ。BETを2倍にして1枚引く</p>
-        <p>・ディーラーは17以上でスタンド</p>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// Component: Texas Poker
-// ==========================================
-
-// ポーカーハンド評価
-function evaluateHand(cards) {
-  // 5枚のベストハンドを評価（ホールデム：手札2枚＋コミュニティ5枚から5枚選ぶ）
-  const allCombos = getCombinations(cards, 5);
-  let best = null;
-  for (const combo of allCombos) {
-    const rank = rankHand(combo);
-    if (!best || rank.score > best.score) best = rank;
-  }
-  return best;
-}
-
-function getCombinations(arr, k) {
-  if (k === 0) return [[]];
-  if (arr.length === 0) return [];
-  const [first, ...rest] = arr;
-  const withFirst = getCombinations(rest, k - 1).map(c => [first, ...c]);
-  const withoutFirst = getCombinations(rest, k);
-  return [...withFirst, ...withoutFirst];
-}
-
-function rankHand(cards) {
-  const ranks = cards.map(c => RANKS.indexOf(c.rank));
-  const suits = cards.map(c => c.suit);
-  const sortedRanks = [...ranks].sort((a, b) => b - a);
-
-  const rankCounts = {};
-  for (const r of ranks) rankCounts[r] = (rankCounts[r] || 0) + 1;
-  const counts = Object.values(rankCounts).sort((a, b) => b - a);
-  const isFlush = new Set(suits).size === 1;
-
-  // Aを1として扱う（A-2-3-4-5のストレート）
-  let isStraight = false;
-  const uniqueRanks = [...new Set(sortedRanks)];
-  if (uniqueRanks.length === 5) {
-    if (uniqueRanks[0] - uniqueRanks[4] === 4) isStraight = true;
-    // A-2-3-4-5
-    if (JSON.stringify(uniqueRanks) === JSON.stringify([12, 3, 2, 1, 0])) isStraight = true;
-  }
-
-  const high = sortedRanks[0];
-
-  if (isFlush && isStraight && high === 12 && sortedRanks[4] === 8) return { score: 9000000, label: 'ロイヤルフラッシュ 👑', tier: 9 };
-  if (isFlush && isStraight) return { score: 8000000 + high, label: 'ストレートフラッシュ', tier: 8 };
-  if (counts[0] === 4) return { score: 7000000 + high, label: 'フォーカード', tier: 7 };
-  if (counts[0] === 3 && counts[1] === 2) return { score: 6000000 + high, label: 'フルハウス', tier: 6 };
-  if (isFlush) return { score: 5000000 + high, label: 'フラッシュ', tier: 5 };
-  if (isStraight) return { score: 4000000 + high, label: 'ストレート', tier: 4 };
-  if (counts[0] === 3) return { score: 3000000 + high, label: 'スリーカード', tier: 3 };
-  if (counts[0] === 2 && counts[1] === 2) return { score: 2000000 + high, label: 'ツーペア', tier: 2 };
-  if (counts[0] === 2) return { score: 1000000 + high, label: 'ワンペア', tier: 1 };
-  return { score: high, label: 'ハイカード', tier: 0 };
-}
-
-const POKER_PAYOUTS = [
-  { tier: 9, label: 'ロイヤルフラッシュ', mult: 100 },
-  { tier: 8, label: 'ストレートフラッシュ', mult: 50 },
-  { tier: 7, label: 'フォーカード', mult: 20 },
-  { tier: 6, label: 'フルハウス', mult: 10 },
-  { tier: 5, label: 'フラッシュ', mult: 6 },
-  { tier: 4, label: 'ストレート', mult: 4 },
-  { tier: 3, label: 'スリーカード', mult: 3 },
-  { tier: 2, label: 'ツーペア', mult: 2 },
-  { tier: 1, label: 'ワンペア（J以上）', mult: 1 },
-];
-
-function TexasPokerView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
-  const [phase, setPhase] = useState('BET'); // BET | PREFLOP | FLOP | TURN | RIVER | SHOWDOWN
-  const [deck, setDeck] = useState([]);
-  const [playerCards, setPlayerCards] = useState([]);
-  const [dealerCards, setDealerCards] = useState([]);
-  const [community, setCommunity] = useState([]);
-  const [bet, setBet] = useState(100);
-  const [betInput, setBetInput] = useState('100');
-  const [pot, setPot] = useState(0);
-  const [playerResult, setPlayerResult] = useState(null);
-  const [dealerResult, setDealerResult] = useState(null);
-  const [gameResult, setGameResult] = useState(null); // WIN | LOSE | PUSH
-  const [netWin, setNetWin] = useState(0);
-  const [foldLoss, setFoldLoss] = useState(false);
-  const [raiseAmount, setRaiseAmount] = useState(0);
-  const [currentBetTotal, setCurrentBetTotal] = useState(0);
-
-  const startGame = async () => {
-    const betAmt = parseInt(betInput);
-    if (isNaN(betAmt) || betAmt <= 0) { showToast("有効なBET額を入力", 'error'); return; }
-    if (balance < betAmt * 2) { showToast("残高が足りません（アンティ＋コール分が必要）", 'error'); return; }
-    setBet(betAmt);
-    await updateBalance(-betAmt); // アンティ
-    setPot(betAmt);
-    setCurrentBetTotal(betAmt);
-    setGameResult(null);
-    setPlayerResult(null);
-    setDealerResult(null);
-    setFoldLoss(false);
-    setRaiseAmount(0);
-
-    let d = createDeck(1);
-    const pCards = [d.pop(), d.pop()];
-    const dCards = [d.pop(), d.pop()];
-    setDeck(d);
-    setPlayerCards(pCards);
-    setDealerCards(dCards);
-    setCommunity([]);
-    setPhase('PREFLOP');
-  };
-
-  const dealFlop = async (extraBet = 0) => {
-    if (extraBet > 0) {
-      if (balance < extraBet) { showToast("残高が足りません！", 'error'); return; }
-      await updateBalance(-extraBet);
-      setPot(p => p + extraBet);
-      setCurrentBetTotal(t => t + extraBet);
-    }
-    let d = [...deck];
-    const flop = [d.pop(), d.pop(), d.pop()];
-    setDeck(d);
-    setCommunity(flop);
-    setPhase('FLOP');
-  };
-
-  const dealTurn = async (extraBet = 0) => {
-    if (extraBet > 0) {
-      if (balance < extraBet) { showToast("残高が足りません！", 'error'); return; }
-      await updateBalance(-extraBet);
-      setPot(p => p + extraBet);
-      setCurrentBetTotal(t => t + extraBet);
-    }
-    let d = [...deck];
-    const turn = d.pop();
-    setDeck(d);
-    setCommunity(c => [...c, turn]);
-    setPhase('TURN');
-  };
-
-  const dealRiver = async (extraBet = 0) => {
-    if (extraBet > 0) {
-      if (balance < extraBet) { showToast("残高が足りません！", 'error'); return; }
-      await updateBalance(-extraBet);
-      setPot(p => p + extraBet);
-      setCurrentBetTotal(t => t + extraBet);
-    }
-    let d = [...deck];
-    const river = d.pop();
-    setDeck(d);
-    const newCommunity = [...community, river];
-    setCommunity(newCommunity);
-    setPhase('RIVER');
-  };
-
-  const showdown = async (extraBet = 0) => {
-    let finalPot = pot;
-    if (extraBet > 0) {
-      if (balance < extraBet) { showToast("残高が足りません！", 'error'); return; }
-      await updateBalance(-extraBet);
-      finalPot = pot + extraBet;
-      setPot(finalPot);
-    }
-
-    const allCommunity = community.length < 5 ? [...community, ...Array(5 - community.length).fill(null)].filter(Boolean) : community;
-
-    // リバーが来ていない場合は最後まで展開
-    let d = [...deck];
-    let finalCommunity = [...community];
-    while (finalCommunity.length < 5) {
-      finalCommunity.push(d.pop());
-    }
-    setDeck(d);
-    setCommunity(finalCommunity);
-
-    const pHand = evaluateHand([...playerCards, ...finalCommunity]);
-    const dHand = evaluateHand([...dealerCards, ...finalCommunity]);
-    setPlayerResult(pHand);
-    setDealerResult(dHand);
-
-    let res, payout = 0;
-    if (pHand.score > dHand.score) {
-      res = 'WIN'; payout = finalPot * 2;
-    } else if (pHand.score === dHand.score) {
-      res = 'PUSH'; payout = finalPot;
-    } else {
-      res = 'LOSE'; payout = 0;
-    }
-
-    setGameResult(res);
-    setPhase('SHOWDOWN');
-    if (payout > 0) await updateBalance(payout);
-    const profit = payout - finalPot;
-    setNetWin(w => w + profit);
-
-    if (res === 'WIN') showToast(`✅ 勝利！ +${(finalPot).toLocaleString()} G！`, 'success');
-    else if (res === 'PUSH') showToast("引き分け", 'info');
-    else showToast("負けです...", 'error');
-    if (payout >= 100000) emitNews(`♠️ ${playerName} がテキサスポーカーで ${payout.toLocaleString()} G 獲得！`, 'jackpot');
-  };
-
-  const fold = () => {
-    setFoldLoss(true);
-    setPhase('SHOWDOWN');
-    setGameResult('FOLD');
-    setNetWin(w => w - currentBetTotal);
-    showToast(`フォールド。-${currentBetTotal.toLocaleString()} G`, 'warning');
-  };
-
-  const phaseLabel = { PREFLOP: 'プリフロップ', FLOP: 'フロップ', TURN: 'ターン', RIVER: 'リバー', SHOWDOWN: 'ショーダウン' };
-
-  const betOptions = [bet, bet * 2];
-  const callAmount = bet;
-
-  return (
-    <div className="p-4 md:p-8 max-w-4xl mx-auto">
-      <div className="w-full flex justify-between items-center mb-6">
-        <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
-        <div className="flex items-center gap-4">
-          <div className="text-center"><div className="text-xs text-gray-500 font-bold">NET</div><div className={`font-mono font-bold ${netWin >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{netWin >= 0 ? '+' : ''}{netWin.toLocaleString()}</div></div>
-          <div className="bg-gray-900/95 px-5 py-2 rounded-full border border-gray-800 font-mono text-xl text-yellow-500 font-bold">{balance.toLocaleString()} G</div>
-        </div>
-      </div>
-
-      <div className="bg-gradient-to-b from-red-950 to-gray-950 rounded-3xl border border-red-900/30 shadow-2xl p-6">
-
-        {/* フェーズ表示 */}
-        {phase !== 'BET' && (
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex gap-2">
-              {['PREFLOP', 'FLOP', 'TURN', 'RIVER', 'SHOWDOWN'].map(p => (
-                <div key={p} className={`text-xs px-2 py-1 rounded font-bold transition-all ${phase === p ? 'bg-red-700 text-white' : ['PREFLOP','FLOP','TURN','RIVER','SHOWDOWN'].indexOf(p) < ['PREFLOP','FLOP','TURN','RIVER','SHOWDOWN'].indexOf(phase) ? 'bg-gray-800 text-gray-400' : 'bg-gray-900 text-gray-600'}`}>
-                  {phaseLabel[p] || p}
-                </div>
-              ))}
-            </div>
-            <div className="text-yellow-400 font-black">POT: {pot.toLocaleString()} G</div>
-          </div>
-        )}
-
-        {/* ディーラーハンド（ショーダウン時のみ表示） */}
-        {phase !== 'BET' && (
-          <div className="mb-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">DEALER</span>
-              {phase === 'SHOWDOWN' && dealerResult && (
-                <span className={`text-sm font-black px-2 py-1 rounded ${gameResult === 'LOSE' ? 'text-emerald-400 bg-emerald-500/10' : 'text-gray-400 bg-gray-800'}`}>{dealerResult.label}</span>
-              )}
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {dealerCards.map((card, i) => (
-                <PlayingCard key={i} card={card} hidden={phase !== 'SHOWDOWN' && !foldLoss} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* コミュニティカード */}
-        {community.length > 0 && (
-          <div className="mb-4">
-            <span className="text-xs text-gray-400 font-bold uppercase tracking-widest block mb-2">COMMUNITY</span>
-            <div className="flex gap-2 flex-wrap">
-              {community.map((card, i) => <PlayingCard key={i} card={card} />)}
-            </div>
-          </div>
-        )}
-
-        {/* 区切り */}
-        {phase !== 'BET' && <div className="border-t border-red-900/30 mb-4"></div>}
-
-        {/* プレイヤーハンド */}
-        {phase !== 'BET' && (
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs text-gray-400 font-bold uppercase tracking-widest">YOU</span>
-              {phase === 'SHOWDOWN' && playerResult && (
-                <span className={`text-sm font-black px-2 py-1 rounded ${gameResult === 'WIN' ? 'text-yellow-400 bg-yellow-500/10' : 'text-gray-400 bg-gray-800'}`}>{playerResult.label}</span>
-              )}
-            </div>
-            <div className="flex gap-2 flex-wrap">
-              {playerCards.map((card, i) => <PlayingCard key={i} card={card} />)}
-            </div>
-          </div>
-        )}
-
-        {/* 結果 */}
-        {phase === 'SHOWDOWN' && (
-          <div className={`border-2 rounded-2xl p-5 text-center mb-5 ${gameResult === 'WIN' ? 'border-yellow-500 bg-yellow-500/10' : gameResult === 'PUSH' ? 'border-blue-500 bg-blue-500/10' : 'border-red-500 bg-red-500/10'}`}>
-            {gameResult === 'FOLD' ? (
-              <div className="text-red-400 text-3xl font-black">🏳️ フォールド</div>
-            ) : (
-              <>
-                <div className={`text-4xl font-black mb-1 ${gameResult === 'WIN' ? 'text-yellow-400' : gameResult === 'PUSH' ? 'text-blue-400' : 'text-red-400'}`}>
-                  {gameResult === 'WIN' ? '🏆 WIN!' : gameResult === 'PUSH' ? '🤝 PUSH' : '❌ LOSE'}
-                </div>
-                {gameResult === 'WIN' && <div className="text-emerald-400 font-bold">+{pot.toLocaleString()} G 獲得！</div>}
-                {gameResult === 'PUSH' && <div className="text-blue-300 font-bold">BETが返ってきました</div>}
-                {gameResult === 'LOSE' && <div className="text-red-300 font-bold">-{pot.toLocaleString()} G</div>}
-              </>
-            )}
-          </div>
-        )}
-
-        {/* アクションパネル */}
-        {phase === 'BET' && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <span className="text-gray-400 font-bold text-sm shrink-0">アンティ</span>
-              <input type="number" value={betInput} onChange={e => setBetInput(e.target.value)} className="flex-1 bg-gray-950 text-white font-mono text-xl p-3 rounded-xl border border-gray-800 focus:outline-none focus:border-red-500" min="10" />
-              <div className="flex gap-1">
-                {[100, 500, 1000, 5000].map(v => (
-                  <button key={v} onClick={() => setBetInput(v.toString())} className="bg-gray-800 hover:bg-gray-700 text-xs px-2 py-1.5 rounded font-bold transition">{v >= 1000 ? v/1000+'k' : v}</button>
-                ))}
-              </div>
-            </div>
-            <p className="text-xs text-gray-500 text-center">※アンティを払ってゲーム開始。各ストリートでコール/レイズ/フォールドを選択</p>
-            <button onClick={startGame} disabled={balance < parseInt(betInput || 0)} className="w-full bg-gradient-to-r from-red-700 to-rose-600 hover:from-red-600 hover:to-rose-500 text-white font-black py-4 rounded-2xl text-xl transition-all transform hover:scale-[1.02] active:scale-95 disabled:opacity-50">
-              ♠️ ゲーム開始
-            </button>
-          </div>
-        )}
-
-        {phase === 'PREFLOP' && (
-          <div className="space-y-3">
-            <p className="text-center text-gray-400 text-sm">フロップを見る？</p>
-            <div className="flex gap-3">
-              <button onClick={() => dealFlop(bet)} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                コール ({bet.toLocaleString()} G)
-              </button>
-              <button onClick={() => dealFlop(bet * 2)} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-3 rounded-xl transition active:scale-95">
-                レイズ ({(bet * 2).toLocaleString()} G)
-              </button>
-              <button onClick={fold} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                フォールド
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === 'FLOP' && (
-          <div className="space-y-3">
-            <p className="text-center text-gray-400 text-sm">ターンを見る？</p>
-            <div className="flex gap-3">
-              <button onClick={() => dealTurn(0)} className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                チェック (無料)
-              </button>
-              <button onClick={() => dealTurn(bet)} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                ベット ({bet.toLocaleString()} G)
-              </button>
-              <button onClick={fold} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                フォールド
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === 'TURN' && (
-          <div className="space-y-3">
-            <p className="text-center text-gray-400 text-sm">リバーを見る？</p>
-            <div className="flex gap-3">
-              <button onClick={() => dealRiver(0)} className="flex-1 bg-emerald-700 hover:bg-emerald-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                チェック (無料)
-              </button>
-              <button onClick={() => dealRiver(bet)} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                ベット ({bet.toLocaleString()} G)
-              </button>
-              <button onClick={fold} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                フォールド
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === 'RIVER' && (
-          <div className="space-y-3">
-            <p className="text-center text-gray-400 text-sm">ショーダウン！</p>
-            <div className="flex gap-3">
-              <button onClick={() => showdown(0)} className="flex-1 bg-yellow-500 hover:bg-yellow-400 text-black font-black py-3 rounded-xl transition active:scale-95">
-                チェック → ショーダウン
-              </button>
-              <button onClick={() => showdown(bet)} className="flex-1 bg-red-600 hover:bg-red-500 text-white font-black py-3 rounded-xl transition active:scale-95">
-                最後にベット ({bet.toLocaleString()} G)
-              </button>
-              <button onClick={fold} className="flex-1 bg-gray-700 hover:bg-gray-600 text-white font-black py-3 rounded-xl transition active:scale-95">
-                フォールド
-              </button>
-            </div>
-          </div>
-        )}
-
-        {phase === 'SHOWDOWN' && (
-          <button onClick={() => { setPhase('BET'); setCommunity([]); setPlayerCards([]); setDealerCards([]); setPot(0); setCurrentBetTotal(0); }} className="w-full bg-gray-800 hover:bg-gray-700 text-white font-black py-4 rounded-2xl text-lg transition active:scale-95">
-            次のゲームへ
-          </button>
-        )}
-      </div>
-
-      {/* ペイアウト表 */}
-      <div className="mt-4 bg-gray-900/50 border border-gray-800 rounded-2xl p-4">
-        <p className="text-gray-300 font-bold text-sm mb-3">📖 ハンドランク</p>
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
-          {[
-            { label: 'ロイヤルフラッシュ 👑', sub: '最強の一手' },
-            { label: 'ストレートフラッシュ', sub: '同スーツの連番5枚' },
-            { label: 'フォーカード', sub: '同ランク4枚' },
-            { label: 'フルハウス', sub: 'スリー＋ペア' },
-            { label: 'フラッシュ', sub: '同スーツ5枚' },
-            { label: 'ストレート', sub: '連番5枚' },
-            { label: 'スリーカード', sub: '同ランク3枚' },
-            { label: 'ツーペア', sub: 'ペア×2' },
-            { label: 'ワンペア', sub: '同ランク2枚' },
-            { label: 'ハイカード', sub: '役なし' },
-          ].map((h, i) => (
-            <div key={i} className="bg-gray-950/50 p-2 rounded-lg border border-gray-800">
-              <div className="text-gray-200 font-bold">{h.label}</div>
-              <div className="text-gray-500">{h.sub}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// Component: Horse Racing（変更なし）
+// Component: Horse Racing
 // ==========================================
 function HorseRacing({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
   const [horses, setHorses] = useState(INITIAL_HORSES.map(h => ({...h, position: 0, speed: 0, stamina: 100})));
@@ -1943,7 +1797,7 @@ function HorseRacing({ balance, updateBalance, onBack, showToast, playerName, em
 }
 
 // ==========================================
-// Component: Labor（変更なし）
+// Component: Labor - 英単語バイト
 // ==========================================
 function LaborView({ balance, updateBalance, onBack, showToast }) {
   const [phase, setPhase] = useState('SELECT');
@@ -1958,6 +1812,7 @@ function LaborView({ balance, updateBalance, onBack, showToast }) {
   const timerRef = useRef(null);
   const inputRef = useRef(null);
   const QUIZ_COUNT = 5;
+
   const startQuiz = (lvl) => {
     setLevel(lvl);
     const pool = [...WORD_LEVELS[lvl].words].sort(() => Math.random() - 0.5).slice(0, QUIZ_COUNT);
@@ -2060,7 +1915,7 @@ function LaborView({ balance, updateBalance, onBack, showToast }) {
 }
 
 // ==========================================
-// Component: Mining（変更なし）
+// Component: Mining - マインスイーパー採掘
 // ==========================================
 function MiningView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
   const [phase, setPhase] = useState('SELECT');
@@ -2128,9 +1983,12 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
     setBoard([]);
     setRevealed(Array(lvl.rows * lvl.cols).fill(false));
     setFlagged(Array(lvl.rows * lvl.cols).fill(false));
-    setGameResult(null); setExplodedCell(null); setSafeCells(0);
+    setGameResult(null);
+    setExplodedCell(null);
+    setSafeCells(0);
     setTotalSafe(lvl.rows * lvl.cols - lvl.mines);
-    setStartTime(Date.now()); setElapsedTime(0);
+    setStartTime(Date.now());
+    setElapsedTime(0);
     setPhase('PLAYING');
     showToast(`${lvl.label} 開始！参加費 -${lvl.cost.toLocaleString()} G`, 'warning');
   };
@@ -2146,29 +2004,38 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
     const lvl = MINE_LEVELS[selectedLevel];
     const idx = row * lvl.cols + col;
     if (revealed[idx] || flagged[idx]) return;
+
     let currentBoard = board;
     if (board.length === 0) {
       currentBoard = generateBoard(lvl.rows, lvl.cols, lvl.mines, row, col);
       setBoard(currentBoard);
     }
+
     if (currentBoard[idx] === -1) {
       clearInterval(timerRef.current);
-      const newRevealed = [...revealed]; newRevealed[idx] = true;
-      setRevealed(newRevealed); setExplodedCell(idx); setGameResult('LOSE'); setPhase('RESULT');
+      const newRevealed = [...revealed];
+      newRevealed[idx] = true;
+      setRevealed(newRevealed);
+      setExplodedCell(idx);
+      setGameResult('LOSE');
+      setPhase('RESULT');
       showToast('💥 爆発！報酬没収！', 'error');
       emitNews(`💥 ${playerName} が${lvl.label}で爆発！報酬没収...`, 'loss');
       return;
     }
+
     let newRevealed = [...revealed];
     newRevealed = expandEmpty(currentBoard, newRevealed, row, col, lvl.rows, lvl.cols);
     setRevealed(newRevealed);
     const newSafe = newRevealed.filter(Boolean).length;
     setSafeCells(newSafe);
+
     if (newSafe >= totalSafe) {
       clearInterval(timerRef.current);
       const reward = lvl.reward;
       await updateBalance(reward);
-      setGameResult('WIN'); setPhase('RESULT');
+      setGameResult('WIN');
+      setPhase('RESULT');
       showToast(`⛏️ 採掘成功！+${reward.toLocaleString()} G！`, 'success');
       if (reward >= 100000) emitNews(`⛏️ ${playerName} が${lvl.label}を完全クリア！${reward.toLocaleString()} G 獲得！`, 'mining');
       else emitNews(`⛏️ ${playerName} が${lvl.label}の採掘に成功！${reward.toLocaleString()} G 獲得！`, 'mining');
@@ -2181,7 +2048,8 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
     const lvl = MINE_LEVELS[selectedLevel];
     const idx = row * lvl.cols + col;
     if (revealed[idx]) return;
-    const newFlagged = [...flagged]; newFlagged[idx] = !newFlagged[idx];
+    const newFlagged = [...flagged];
+    newFlagged[idx] = !newFlagged[idx];
     setFlagged(newFlagged);
   };
 
@@ -2221,8 +2089,14 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
                   </div>
                 </div>
                 <div className="flex justify-between items-center">
-                  <div><div className="text-gray-400 text-xs">参加費</div><div className="text-red-400 font-black text-lg">-{lv.cost.toLocaleString()} G</div></div>
-                  <div className="text-right"><div className="text-gray-400 text-xs">クリア報酬</div><div className={`font-black text-2xl ${lv.color}`}>+{lv.reward.toLocaleString()} G</div></div>
+                  <div>
+                    <div className="text-gray-400 text-xs">参加費</div>
+                    <div className="text-red-400 font-black text-lg">-{lv.cost.toLocaleString()} G</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-gray-400 text-xs">クリア報酬</div>
+                    <div className={`font-black text-2xl ${lv.color}`}>+{lv.reward.toLocaleString()} G</div>
+                  </div>
                 </div>
                 <div className="mt-3 w-full bg-gray-900/50 rounded-full h-1.5">
                   <div className="h-1.5 rounded-full bg-current opacity-30" style={{width: `${(lv.mines / (lv.rows * lv.cols)) * 100}%`}}></div>
@@ -2244,32 +2118,59 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
       {phase === 'PLAYING' && lvl && (
         <div className="flex flex-col items-center">
           <div className="w-full max-w-2xl mb-4">
-            <div className="flex justify-between text-xs text-gray-400 mb-1"><span>採掘進捗</span><span>{Math.round(progress)}%</span></div>
+            <div className="flex justify-between text-xs text-gray-400 mb-1">
+              <span>採掘進捗</span>
+              <span>{Math.round(progress)}%</span>
+            </div>
             <div className="w-full bg-gray-800 rounded-full h-2">
               <div className="h-2 rounded-full bg-gradient-to-r from-amber-500 to-yellow-400 transition-all" style={{width: `${progress}%`}}></div>
             </div>
           </div>
+
           <div className="bg-gray-900 border border-gray-700 rounded-2xl p-3 shadow-2xl overflow-auto max-w-full">
             <div style={{display: 'grid', gridTemplateColumns: `repeat(${lvl.cols}, 1fr)`, gap: '2px'}}>
               {Array(lvl.rows * lvl.cols).fill(0).map((_, idx) => {
-                const row = Math.floor(idx / lvl.cols); const col = idx % lvl.cols;
-                const isRevealed = revealed[idx]; const isFlagged = flagged[idx];
+                const row = Math.floor(idx / lvl.cols);
+                const col = idx % lvl.cols;
+                const isRevealed = revealed[idx];
+                const isFlagged = flagged[idx];
                 const isMine = board.length > 0 && board[idx] === -1;
                 const isExploded = idx === explodedCell;
                 const num = board.length > 0 ? board[idx] : 0;
+
                 return (
-                  <button key={idx} onClick={() => handleCellClick(row, col)} onContextMenu={(e) => handleRightClick(e, row, col)}
-                    className={`w-8 h-8 md:w-9 md:h-9 flex items-center justify-center text-xs md:text-sm font-black rounded transition-all select-none
+                  <button
+                    key={idx}
+                    onClick={() => handleCellClick(row, col)}
+                    onContextMenu={(e) => handleRightClick(e, row, col)}
+                    className={`
+                      w-8 h-8 md:w-9 md:h-9 flex items-center justify-center text-xs md:text-sm font-black rounded transition-all select-none
                       ${isExploded ? 'bg-red-600 text-white scale-110 z-10 relative' : ''}
-                      ${isRevealed && !isExploded ? isMine ? 'bg-red-900/40 text-red-500' : 'bg-gray-800 text-gray-200 border border-gray-700' : !isRevealed ? 'bg-gray-700 hover:bg-gray-600 active:bg-gray-500 border border-gray-600 cursor-pointer' : ''}`}
-                    style={{ minWidth: '2rem' }}>
-                    {isExploded ? '💥' : isFlagged && !isRevealed ? '🚩' : isRevealed && isMine ? '💣' : isRevealed && num > 0 ? <span className={numberColors[num]}>{num}</span> : isRevealed ? '' : ''}
+                      ${isRevealed && !isExploded
+                        ? isMine
+                          ? 'bg-red-900/40 text-red-500'
+                          : 'bg-gray-800 text-gray-200 border border-gray-700'
+                        : !isRevealed
+                          ? 'bg-gray-700 hover:bg-gray-600 active:bg-gray-500 border border-gray-600 cursor-pointer'
+                          : ''
+                      }
+                    `}
+                    style={{ minWidth: '2rem' }}
+                  >
+                    {isExploded ? '💥' :
+                     isFlagged && !isRevealed ? '🚩' :
+                     isRevealed && isMine ? '💣' :
+                     isRevealed && num > 0 ? <span className={numberColors[num]}>{num}</span> :
+                     isRevealed ? '' : ''}
                   </button>
                 );
               })}
             </div>
           </div>
-          <div className="mt-4 text-xs text-gray-500 text-center">右クリック（モバイルは長押し）でフラグ設置 ／ フラグ残り {lvl.mines - flagged.filter(Boolean).length} 個</div>
+
+          <div className="mt-4 text-xs text-gray-500 text-center">
+            右クリック（モバイルは長押し）でフラグ設置 ／ フラグ残り {lvl.mines - flagged.filter(Boolean).length} 個
+          </div>
         </div>
       )}
 
@@ -2277,19 +2178,34 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
         <div className="text-center max-w-md mx-auto">
           <div className={`p-10 rounded-3xl border shadow-2xl mb-6 ${gameResult === 'WIN' ? 'bg-amber-500/10 border-amber-500' : 'bg-red-500/10 border-red-500'}`}>
             <div className="text-7xl mb-4">{gameResult === 'WIN' ? '⛏️' : '💥'}</div>
-            <h3 className={`text-4xl font-black mb-2 ${gameResult === 'WIN' ? 'text-amber-400' : 'text-red-400'}`}>{gameResult === 'WIN' ? '採掘成功！' : '爆発！！'}</h3>
+            <h3 className={`text-4xl font-black mb-2 ${gameResult === 'WIN' ? 'text-amber-400' : 'text-red-400'}`}>
+              {gameResult === 'WIN' ? '採掘成功！' : '爆発！！'}
+            </h3>
             <p className="text-gray-400 mb-4">{lvl.label} / {elapsedTime}秒</p>
-            {gameResult === 'WIN' && <div><div className="text-5xl font-black text-emerald-400 mb-2">+{lvl.reward.toLocaleString()} G</div><p className="text-gray-400 text-sm">採掘報酬を獲得しました！</p></div>}
-            {gameResult === 'LOSE' && <div><div className="text-3xl font-black text-red-400 mb-2">参加費 {lvl.cost.toLocaleString()} G 没収</div><p className="text-gray-400 text-sm">地雷を踏んでしまいました...</p></div>}
+            {gameResult === 'WIN' && (
+              <div>
+                <div className="text-5xl font-black text-emerald-400 mb-2">+{lvl.reward.toLocaleString()} G</div>
+                <p className="text-gray-400 text-sm">採掘報酬を獲得しました！</p>
+              </div>
+            )}
+            {gameResult === 'LOSE' && (
+              <div>
+                <div className="text-3xl font-black text-red-400 mb-2">参加費 {lvl.cost.toLocaleString()} G 没収</div>
+                <p className="text-gray-400 text-sm">地雷を踏んでしまいました...</p>
+              </div>
+            )}
           </div>
+
           {board.length > 0 && (
             <div className="bg-gray-900 border border-gray-700 rounded-2xl p-3 mb-6 overflow-auto">
               <p className="text-xs text-gray-500 mb-2">地雷の場所</p>
               <div style={{display: 'grid', gridTemplateColumns: `repeat(${lvl.cols}, 1fr)`, gap: '2px'}}>
                 {board.map((cell, idx) => {
-                  const isExploded = idx === explodedCell; const isRev = revealed[idx];
+                  const isExploded = idx === explodedCell;
+                  const isRev = revealed[idx];
                   return (
-                    <div key={idx} className={`w-7 h-7 flex items-center justify-center text-xs font-black rounded ${isExploded ? 'bg-red-600' : cell === -1 ? 'bg-gray-800 text-red-400' : isRev ? 'bg-gray-800 text-gray-400' : 'bg-gray-700 text-gray-500'}`}>
+                    <div key={idx} className={`w-7 h-7 flex items-center justify-center text-xs font-black rounded
+                      ${isExploded ? 'bg-red-600' : cell === -1 ? 'bg-gray-800 text-red-400' : isRev ? 'bg-gray-800 text-gray-400' : 'bg-gray-700 text-gray-500'}`}>
                       {isExploded ? '💥' : cell === -1 ? '💣' : isRev && cell > 0 ? cell : ''}
                     </div>
                   );
@@ -2297,6 +2213,7 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
               </div>
             </div>
           )}
+
           <div className="flex gap-4">
             <button onClick={() => { setPhase('SELECT'); setSelectedLevel(null); }} className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-4 rounded-xl font-bold transition">レベル選択へ</button>
             <button onClick={() => startGame(selectedLevel)} disabled={balance < lvl.cost} className={`flex-1 text-white py-4 rounded-xl font-black transition disabled:opacity-40 ${gameResult === 'WIN' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-red-700 hover:bg-red-600'}`}>

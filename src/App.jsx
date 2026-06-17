@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, getDocs, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { Coins, Trophy, ArrowLeft, AlertCircle, PlaySquare, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, Briefcase, Lock, Star, Newspaper, Pickaxe, BookOpen, History, Bomb, Scissors, Hand, Square } from 'lucide-react';
+import { Coins, Trophy, ArrowLeft, AlertCircle, PlaySquare, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, Briefcase, Lock, Star, Newspaper, Pickaxe, BookOpen, History, Bomb, Scissors, Hand, Square, TrendingUp, BarChart2 } from 'lucide-react';
 import { firebaseConfig, appId } from './firebaseConfig';
 
 const app = initializeApp(firebaseConfig);
@@ -82,13 +82,10 @@ const MINE_LEVELS = [
 ];
 
 // ==================== 金融定数 ====================
-// 銀行：30分ごとに0.1%
 const INTEREST_RATE_30MIN = 0.001;
-const INTEREST_INTERVAL = 1800000; // 30分
-
-// ローン：15分ごとに0.3%
+const INTEREST_INTERVAL = 1800000;
 const LOAN_INTEREST_RATE = 0.003;
-const LOAN_INTERVAL = 900000; // 15分
+const LOAN_INTERVAL = 900000;
 
 // ==================== ニュースを投稿するユーティリティ ====================
 async function postNews(db, appId, message, type = 'info') {
@@ -96,6 +93,25 @@ async function postNews(db, appId, message, type = 'info') {
     const newsRef = collection(db, 'artifacts', appId, 'public', 'data', 'news');
     await addDoc(newsRef, { message, type, createdAt: Date.now() });
   } catch (e) { console.error('news post error', e); }
+}
+
+// ==================== 投資ユーティリティ ====================
+// gambleNet: ギャンブル・労働による純損益（正=利益, 負=損失）
+// 株価変動率: gambleNet / baseInvestment * 0.5 (最大±50%/回)
+async function updateStockPriceForTarget(db, appId, targetName, gambleNet) {
+  try {
+    const safeTarget = encodeURIComponent(targetName);
+    const stockRef = doc(db, 'artifacts', appId, 'public', 'data', 'stocks', safeTarget);
+    const snap = await getDoc(stockRef);
+    if (!snap.exists()) return;
+    const data = snap.data();
+    const base = data.baseInvestment || 1;
+    // 変動率: 損益/基準額 * 50%、上限±80%
+    let changeRate = Math.max(-0.8, Math.min(0.8, (gambleNet / base) * 0.5));
+    const newPrice = Math.max(0.01, (data.currentPrice || 1.0) * (1 + changeRate));
+    const priceHistory = [...(data.priceHistory || []), { price: newPrice, at: Date.now() }].slice(-50);
+    await updateDoc(stockRef, { currentPrice: newPrice, priceHistory, lastUpdated: Date.now() });
+  } catch (e) { console.error('stock price update error', e); }
 }
 
 // ==================== メインApp ====================
@@ -130,7 +146,6 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // プレイヤーデータ購読
   useEffect(() => {
     if (!user || !playerName) return;
     const safeName = encodeURIComponent(playerName);
@@ -161,7 +176,6 @@ export default function App() {
     return () => unsub();
   }, [user, playerName]);
 
-  // ニュース購読（グローバル）
   useEffect(() => {
     if (!user) return;
     const newsRef = collection(db, 'artifacts', appId, 'public', 'data', 'news');
@@ -174,7 +188,6 @@ export default function App() {
     return () => unsub();
   }, [user]);
 
-  // 銀行利子（30分ごと）
   useEffect(() => {
     if (!user || !playerName || bankBalance <= 0) return;
     const timer = setInterval(() => {
@@ -189,7 +202,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [user, playerName, bankBalance]);
 
-  // ローン利息（15分ごと）
   useEffect(() => {
     if (!user || !playerName || loanBalance <= 0) return;
     const timer = setInterval(() => {
@@ -204,7 +216,6 @@ export default function App() {
     return () => clearInterval(timer);
   }, [user, playerName, loanBalance]);
 
-  // ランキング購読
   useEffect(() => {
     if (!user || (view !== 'RANKING' && view !== 'MENU')) return;
     const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
@@ -259,6 +270,17 @@ export default function App() {
     const safeName = encodeURIComponent(playerName);
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeName);
     await updateDoc(docRef, { balance: increment(amount) });
+  };
+
+  // ギャンブル・労働専用updateBalance（株価連動あり）
+  const updateBalanceWithStock = async (amount) => {
+    const safeName = encodeURIComponent(playerName);
+    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeName);
+    await updateDoc(docRef, { balance: increment(amount) });
+    // 株価更新（投資されている場合のみ）
+    if (amount !== 0) {
+      await updateStockPriceForTarget(db, appId, playerName, amount);
+    }
   };
 
   const addTransferHistory = async (entry) => {
@@ -342,7 +364,6 @@ export default function App() {
     setLoanInput('');
   };
 
-  // ローン返済：信用度 -15
   const handleRepay = async () => {
     const amount = parseInt(loanInput);
     if (isNaN(amount) || amount <= 0) { showToast("有効な数値を入力してください。", 'error'); return; }
@@ -417,6 +438,7 @@ export default function App() {
     mining: 'text-amber-400',
     loss: 'text-red-400',
     janken: 'text-pink-400',
+    invest: 'text-teal-400',
   };
 
   if (loadingMsg) return (
@@ -512,7 +534,6 @@ export default function App() {
                 <div>
                   <p className="text-xs text-gray-500 uppercase tracking-widest font-bold mb-3">🎰 カジノ</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* スロット */}
                     <button onClick={() => setView('SLOT')} className="group relative overflow-hidden bg-gradient-to-br from-purple-950 to-indigo-950 p-6 rounded-3xl shadow-2xl border border-purple-500/20 hover:border-purple-500/40 transition-all transform hover:-translate-y-1 text-left">
                       <div className="absolute top-0 right-0 -mt-4 -mr-4 text-purple-500/10 group-hover:text-purple-400/20 transition-all duration-500"><PlaySquare size={110} /></div>
                       <span className="bg-purple-500/10 text-purple-300 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 inline-block">Casino</span>
@@ -520,7 +541,6 @@ export default function App() {
                       <p className="text-gray-400 text-sm">3×3マルチライン・高配当</p>
                     </button>
 
-                    {/* ルーレット（新規追加） */}
                     <button onClick={() => setView('ROULETTE')} className="group relative overflow-hidden bg-gradient-to-br from-red-950 to-rose-950 p-6 rounded-3xl shadow-2xl border border-red-500/20 hover:border-red-500/40 transition-all transform hover:-translate-y-1 text-left">
                       <div className="absolute top-0 right-0 -mt-4 -mr-4 text-red-500/10 group-hover:text-red-400/20 transition-all duration-500">
                         <span className="text-[110px] select-none leading-none">🎡</span>
@@ -530,7 +550,6 @@ export default function App() {
                       <p className="text-gray-400 text-sm">数字1〜20・倍率は数字の値</p>
                     </button>
 
-                    {/* 競馬 */}
                     {HORSE_RACING_EVENT_ACTIVE ? (
                       <button onClick={() => setView('RACE')} className="group relative overflow-hidden bg-gradient-to-br from-emerald-950 to-green-950 p-6 rounded-3xl shadow-2xl border border-emerald-500/20 hover:border-emerald-500/40 transition-all transform hover:-translate-y-1 text-left">
                         <div className="absolute top-0 right-0 -mt-4 -mr-4 text-emerald-500/10 group-hover:text-emerald-400/20 transition-all duration-500"><Trophy size={110} /></div>
@@ -595,7 +614,7 @@ export default function App() {
                 </div>
 
                 {/* サービス */}
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                   <button onClick={() => setView('BANK')} className="flex items-center justify-between p-5 bg-gray-900 hover:bg-gray-800 rounded-2xl border border-gray-800 transition transform hover:scale-[1.02]">
                     <div className="flex items-center gap-3">
                       <div className="p-3 bg-emerald-500/10 rounded-xl text-emerald-400"><Landmark size={22} /></div>
@@ -607,6 +626,14 @@ export default function App() {
                     <div className="flex items-center gap-3">
                       <div className="p-3 bg-blue-500/10 rounded-xl text-blue-400"><Send size={22} /></div>
                       <div className="text-left"><span className="font-bold text-white block">オンライン送金</span><span className="text-xs text-gray-400">他プレイヤーへ送金</span></div>
+                    </div>
+                    <ChevronRight className="text-gray-500" size={20} />
+                  </button>
+                  {/* 投資ボタン */}
+                  <button onClick={() => setView('INVEST')} className="flex items-center justify-between p-5 bg-gray-900 hover:bg-gray-800 rounded-2xl border border-teal-800/50 transition transform hover:scale-[1.02]">
+                    <div className="flex items-center gap-3">
+                      <div className="p-3 bg-teal-500/10 rounded-xl text-teal-400"><TrendingUp size={22} /></div>
+                      <div className="text-left"><span className="font-bold text-white block">株式投資</span><span className="text-xs text-teal-400">プレイヤー株を売買</span></div>
                     </div>
                     <ChevronRight className="text-gray-500" size={20} />
                   </button>
@@ -686,12 +713,13 @@ export default function App() {
           </div>
         )}
 
-        {view === 'SLOT' && <SlotMachine balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
-        {view === 'ROULETTE' && <RouletteView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
-        {view === 'RACE' && HORSE_RACING_EVENT_ACTIVE && <HorseRacing balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
-        {view === 'LABOR' && <LaborView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} />}
-        {view === 'MINING' && <MiningView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
-        {view === 'JANKEN' && <JankenView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} db={db} appId={appId} />}
+        {view === 'SLOT' && <SlotMachine balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
+        {view === 'ROULETTE' && <RouletteView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
+        {view === 'RACE' && HORSE_RACING_EVENT_ACTIVE && <HorseRacing balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
+        {view === 'LABOR' && <LaborView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} />}
+        {view === 'MINING' && <MiningView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
+        {view === 'JANKEN' && <JankenView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} db={db} appId={appId} />}
+        {view === 'INVEST' && <InvestView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} db={db} appId={appId} />}
 
         {/* ===== BANK ===== */}
         {view === 'BANK' && (
@@ -857,6 +885,504 @@ export default function App() {
       <footer className="py-6 border-t border-gray-900 text-center text-xs text-gray-600">
         © 2026 GRAND CASINO & TURF. All Rights Reserved.
       </footer>
+    </div>
+  );
+}
+
+// ==========================================
+// Component: InvestView（株式投資）
+// ==========================================
+function InvestView({ balance, updateBalance, onBack, showToast, playerName, emitNews, db, appId }) {
+  const [players, setPlayers] = useState([]);
+  const [myStocks, setMyStocks] = useState({}); // { targetName: { shares, avgBuyPrice } }
+  const [stockPrices, setStockPrices] = useState({}); // { targetName: { currentPrice, priceHistory, baseInvestment } }
+  const [selectedPlayer, setSelectedPlayer] = useState(null);
+  const [investAmount, setInvestAmount] = useState('');
+  const [sellAmount, setSellAmount] = useState('');
+  const [tab, setTab] = useState('MARKET'); // MARKET | PORTFOLIO
+  const [loading, setLoading] = useState(true);
+
+  // 全プレイヤー一覧を取得
+  useEffect(() => {
+    const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
+    const unsub = onSnapshot(collRef, snap => {
+      const list = [];
+      snap.forEach(d => {
+        const data = d.data();
+        const name = data.name || decodeURIComponent(d.id);
+        if (name !== playerName) list.push({ name, balance: data.balance || 0 });
+      });
+      setPlayers(list);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // 株価データ購読
+  useEffect(() => {
+    const stocksRef = collection(db, 'artifacts', appId, 'public', 'data', 'stocks');
+    const unsub = onSnapshot(stocksRef, snap => {
+      const prices = {};
+      snap.forEach(d => {
+        prices[decodeURIComponent(d.id)] = d.data();
+      });
+      setStockPrices(prices);
+    });
+    return () => unsub();
+  }, []);
+
+  // 自分の保有株購読
+  useEffect(() => {
+    const safeMe = encodeURIComponent(playerName);
+    const portfolioRef = doc(db, 'artifacts', appId, 'public', 'data', 'portfolios', safeMe);
+    const unsub = onSnapshot(portfolioRef, snap => {
+      if (snap.exists()) setMyStocks(snap.data().holdings || {});
+      else setMyStocks({});
+    });
+    return () => unsub();
+  }, [playerName]);
+
+  // 株式を購入する
+  const handleBuy = async () => {
+    const amount = parseInt(investAmount);
+    if (!selectedPlayer) { showToast('投資先を選んでください', 'error'); return; }
+    if (isNaN(amount) || amount < 100) { showToast('100G以上で投資してください', 'error'); return; }
+    if (amount > balance) { showToast('残高が足りません！', 'error'); return; }
+
+    const safeTarget = encodeURIComponent(selectedPlayer);
+    const safeMe = encodeURIComponent(playerName);
+
+    try {
+      // 1. 投資先プレイヤーに10%が配当
+      const dividend = Math.floor(amount * 0.1);
+      const investedAmount = amount - dividend; // 90%が株券の価値に
+
+      // 2. 株価テーブルを取得/作成
+      const stockRef = doc(db, 'artifacts', appId, 'public', 'data', 'stocks', safeTarget);
+      const stockSnap = await getDoc(stockRef);
+
+      let currentPrice = 1.0;
+      let baseInvestment = investedAmount;
+      let totalShares = 0;
+
+      if (stockSnap.exists()) {
+        const sd = stockSnap.data();
+        currentPrice = sd.currentPrice || 1.0;
+        baseInvestment = (sd.baseInvestment || 0) + investedAmount;
+        totalShares = sd.totalShares || 0;
+      }
+
+      // 株数 = 投資額(90%) / 現在の株価
+      const sharesBought = investedAmount / currentPrice;
+      const newTotalShares = totalShares + sharesBought;
+
+      // 3. 自分の残高を減らす
+      const selfRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeMe);
+      await updateDoc(selfRef, { balance: increment(-amount) });
+
+      // 4. 投資先に10%を送る
+      const targetRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeTarget);
+      const targetSnap = await getDoc(targetRef);
+      if (targetSnap.exists()) {
+        await updateDoc(targetRef, { balance: increment(dividend) });
+      }
+
+      // 5. 株価データを更新
+      const priceHistory = stockSnap.exists() ? [...(stockSnap.data().priceHistory || []), { price: currentPrice, at: Date.now() }].slice(-50) : [{ price: 1.0, at: Date.now() }];
+      await setDoc(stockRef, {
+        targetName: selectedPlayer,
+        currentPrice,
+        baseInvestment,
+        totalShares: newTotalShares,
+        priceHistory,
+        lastUpdated: Date.now(),
+      }, { merge: true });
+
+      // 6. 自分のポートフォリオを更新
+      const portfolioRef = doc(db, 'artifacts', appId, 'public', 'data', 'portfolios', safeMe);
+      const portSnap = await getDoc(portfolioRef);
+      const holdings = portSnap.exists() ? (portSnap.data().holdings || {}) : {};
+      const existing = holdings[selectedPlayer] || { shares: 0, avgBuyPrice: 0 };
+      const newShares = existing.shares + sharesBought;
+      const newAvg = ((existing.shares * existing.avgBuyPrice) + (sharesBought * currentPrice)) / newShares;
+      holdings[selectedPlayer] = { shares: newShares, avgBuyPrice: newAvg };
+      await setDoc(portfolioRef, { holdings }, { merge: true });
+
+      showToast(`📈 ${selectedPlayer} 株 ${sharesBought.toFixed(2)}株 購入！配当 ${dividend.toLocaleString()}G を送付`, 'success');
+      emitNews(`📈 ${playerName} が ${selectedPlayer} 株に ${amount.toLocaleString()} G 投資！${dividend.toLocaleString()} G の配当が ${selectedPlayer} へ！`, 'invest');
+      setInvestAmount('');
+    } catch(e) {
+      console.error(e);
+      showToast('投資エラーが発生しました', 'error');
+    }
+  };
+
+  // 株式を売却する
+  const handleSell = async (targetName) => {
+    const sharesToSell = parseFloat(sellAmount);
+    const holding = myStocks[targetName];
+    if (!holding || holding.shares <= 0) { showToast('保有株がありません', 'error'); return; }
+    if (isNaN(sharesToSell) || sharesToSell <= 0 || sharesToSell > holding.shares) {
+      showToast(`売却株数は 0〜${holding.shares.toFixed(2)} の範囲で入力してください`, 'error'); return;
+    }
+
+    const stockData = stockPrices[targetName];
+    if (!stockData) { showToast('株価データがありません', 'error'); return; }
+
+    const currentPrice = stockData.currentPrice || 1.0;
+    const sellValue = Math.floor(sharesToSell * currentPrice);
+
+    try {
+      const safeMe = encodeURIComponent(playerName);
+      const safeTarget = encodeURIComponent(targetName);
+
+      // 残高を増やす
+      const selfRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeMe);
+      await updateDoc(selfRef, { balance: increment(sellValue) });
+
+      // 株数を更新
+      const portfolioRef = doc(db, 'artifacts', appId, 'public', 'data', 'portfolios', safeMe);
+      const newShares = holding.shares - sharesToSell;
+      const newHoldings = { ...myStocks };
+      if (newShares < 0.001) {
+        delete newHoldings[targetName];
+      } else {
+        newHoldings[targetName] = { ...holding, shares: newShares };
+      }
+      await setDoc(portfolioRef, { holdings: newHoldings }, { merge: true });
+
+      // 総株数も更新
+      const stockRef = doc(db, 'artifacts', appId, 'public', 'data', 'stocks', safeTarget);
+      const stockSnap = await getDoc(stockRef);
+      if (stockSnap.exists()) {
+        const newTotal = Math.max(0, (stockSnap.data().totalShares || 0) - sharesToSell);
+        await updateDoc(stockRef, { totalShares: newTotal });
+      }
+
+      const profit = sellValue - Math.floor(sharesToSell * holding.avgBuyPrice);
+      showToast(`📉 ${targetName} 株売却 +${sellValue.toLocaleString()} G (${profit >= 0 ? '+' : ''}${profit.toLocaleString()} G)`, profit >= 0 ? 'success' : 'warning');
+      setSellAmount('');
+    } catch(e) {
+      console.error(e);
+      showToast('売却エラー', 'error');
+    }
+  };
+
+  const getStockChangeColor = (current, avg) => {
+    if (!avg || avg === 0) return 'text-gray-400';
+    return current >= avg ? 'text-emerald-400' : 'text-red-400';
+  };
+
+  const getStockTrend = (history) => {
+    if (!history || history.length < 2) return 0;
+    const prev = history[history.length - 2]?.price || history[0].price;
+    const curr = history[history.length - 1]?.price;
+    return ((curr - prev) / prev) * 100;
+  };
+
+  // ミニチャート描画（インライン SVG）
+  const MiniChart = ({ history, color }) => {
+    if (!history || history.length < 2) return <span className="text-gray-600 text-xs">データなし</span>;
+    const prices = history.slice(-20).map(h => h.price);
+    const min = Math.min(...prices);
+    const max = Math.max(...prices);
+    const range = max - min || 1;
+    const w = 80, h = 30;
+    const pts = prices.map((p, i) => `${(i / (prices.length - 1)) * w},${h - ((p - min) / range) * h}`).join(' ');
+    return (
+      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="overflow-visible">
+        <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" />
+      </svg>
+    );
+  };
+
+  const myHoldings = Object.entries(myStocks).filter(([, h]) => h.shares > 0.001);
+  const totalPortfolioValue = myHoldings.reduce((sum, [name, h]) => {
+    const price = stockPrices[name]?.currentPrice || h.avgBuyPrice;
+    return sum + h.shares * price;
+  }, 0);
+  const totalCost = myHoldings.reduce((sum, [name, h]) => sum + h.shares * h.avgBuyPrice, 0);
+
+  return (
+    <div className="p-4 md:p-8 max-w-5xl mx-auto">
+      <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white mb-6 transition"><ArrowLeft size={20} /> メニューに戻る</button>
+
+      {/* ヘッダー */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+        <div>
+          <h2 className="text-3xl font-black text-white flex items-center gap-3">
+            <TrendingUp className="text-teal-400" size={30} /> 株式投資市場
+          </h2>
+          <p className="text-gray-400 text-sm mt-1">プレイヤーの株を購入・ギャンブル勝率で株価が変動します</p>
+        </div>
+        <div className="bg-gray-900/90 border border-gray-800 px-4 py-3 rounded-2xl">
+          <span className="text-xs text-gray-400 font-bold block">所持金</span>
+          <span className="font-mono text-xl font-black text-yellow-400">{balance.toLocaleString()} G</span>
+        </div>
+      </div>
+
+      {/* ルール説明 */}
+      <div className="bg-teal-500/5 border border-teal-500/20 rounded-2xl p-4 mb-6 text-xs text-gray-300 space-y-1">
+        <p className="text-teal-400 font-black text-sm mb-2">📊 株式投資のルール</p>
+        <p>・投資額の <span className="text-yellow-400 font-bold">10%</span> は即座に投資先プレイヤーへ配当として支払われます</p>
+        <p>・残り <span className="text-teal-400 font-bold">90%</span> が株券として保有されます</p>
+        <p>・株価は投資先の <span className="text-pink-400 font-bold">ギャンブル・労働の損益のみ</span> で変動します（銀行・送金は影響なし）</p>
+        <p>・投資先が勝てば株価上昇📈、負ければ株価下落📉</p>
+        <p>・いつでも市場価格で売却して利益を確定できます</p>
+      </div>
+
+      {/* タブ */}
+      <div className="flex gap-2 mb-6">
+        {[['MARKET', '📈 マーケット'], ['PORTFOLIO', '💼 ポートフォリオ']].map(([key, label]) => (
+          <button key={key} onClick={() => setTab(key)}
+            className={`px-5 py-2.5 rounded-xl font-black text-sm transition ${tab === key ? 'bg-teal-600 text-white' : 'bg-gray-900 text-gray-400 hover:bg-gray-800 border border-gray-800'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* マーケットタブ */}
+      {tab === 'MARKET' && (
+        <div className="space-y-4">
+          {loading && <p className="text-gray-500 text-center py-12">読み込み中...</p>}
+          {!loading && players.length === 0 && (
+            <p className="text-gray-500 text-center py-12">他のプレイヤーがまだいません</p>
+          )}
+          {players.map(p => {
+            const stock = stockPrices[p.name];
+            const currentPrice = stock?.currentPrice || 1.0;
+            const trend = getStockTrend(stock?.priceHistory);
+            const myHolding = myStocks[p.name];
+            const isSelected = selectedPlayer === p.name;
+
+            return (
+              <div key={p.name} className={`bg-gray-900 rounded-2xl border transition-all ${isSelected ? 'border-teal-500/60' : 'border-gray-800 hover:border-gray-700'}`}>
+                <div
+                  className="p-4 cursor-pointer"
+                  onClick={() => setSelectedPlayer(isSelected ? null : p.name)}
+                >
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-4 flex-1">
+                      {/* アバター */}
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-teal-600 to-cyan-700 flex items-center justify-center font-black text-white text-xl flex-shrink-0">
+                        {p.name.charAt(0)}
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-white font-black text-lg">{p.name}</span>
+                          {myHolding && myHolding.shares > 0.001 && (
+                            <span className="bg-teal-500/20 text-teal-400 text-xs px-2 py-0.5 rounded-full font-bold">保有中</span>
+                          )}
+                        </div>
+                        <div className="text-gray-500 text-xs">発行済株: {(stock?.totalShares || 0).toFixed(2)} 株</div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-6">
+                      {/* ミニチャート */}
+                      <div className="hidden md:block">
+                        <MiniChart history={stock?.priceHistory} color={trend >= 0 ? '#34d399' : '#f87171'} />
+                      </div>
+
+                      {/* 株価 */}
+                      <div className="text-right">
+                        <div className="text-white font-mono font-black text-xl">{currentPrice.toFixed(2)}</div>
+                        <div className={`text-xs font-bold ${trend >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {trend >= 0 ? '▲' : '▼'} {Math.abs(trend).toFixed(1)}%
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 購入パネル（展開） */}
+                {isSelected && (
+                  <div className="border-t border-gray-800 p-4 bg-gray-950/50 rounded-b-2xl">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* 購入 */}
+                      <div>
+                        <p className="text-teal-400 font-black text-sm mb-3">📈 株を購入する</p>
+                        <div className="bg-gray-900 rounded-xl p-3 text-xs text-gray-400 space-y-1 mb-3">
+                          <div className="flex justify-between"><span>現在の株価</span><span className="text-white font-bold">{currentPrice.toFixed(4)} G/株</span></div>
+                          <div className="flex justify-between"><span>配当（10%即払）</span><span className="text-yellow-400 font-bold">→ {p.name} へ</span></div>
+                          <div className="flex justify-between"><span>購入株数（90%分）</span><span className="text-teal-400 font-bold">{investAmount ? (Math.floor(parseInt(investAmount) * 0.9) / currentPrice).toFixed(2) : '0.00'} 株</span></div>
+                        </div>
+                        <div className="flex gap-2 mb-2">
+                          <input type="number" value={investAmount} onChange={e => setInvestAmount(e.target.value)}
+                            placeholder="投資額 (G)" min="100"
+                            className="flex-1 bg-gray-900 text-white font-mono p-3 rounded-xl border border-gray-700 focus:outline-none focus:border-teal-500" />
+                          <button onClick={handleBuy} disabled={!investAmount || parseInt(investAmount) < 100 || parseInt(investAmount) > balance}
+                            className="bg-teal-600 hover:bg-teal-500 disabled:opacity-40 text-white font-black px-4 rounded-xl transition active:scale-95">
+                            購入
+                          </button>
+                        </div>
+                        <div className="flex gap-1">
+                          {[1000, 5000, 10000, 50000].map(v => (
+                            <button key={v} onClick={() => setInvestAmount(v.toString())} disabled={v > balance}
+                              className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-400 text-xs py-1.5 rounded-lg transition disabled:opacity-30">
+                              {v >= 1000 ? v/1000 + 'K' : v}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* 売却 */}
+                      <div>
+                        <p className="text-red-400 font-black text-sm mb-3">📉 株を売却する</p>
+                        {myHolding && myHolding.shares > 0.001 ? (
+                          <>
+                            <div className="bg-gray-900 rounded-xl p-3 text-xs text-gray-400 space-y-1 mb-3">
+                              <div className="flex justify-between"><span>保有株数</span><span className="text-white font-bold">{myHolding.shares.toFixed(2)} 株</span></div>
+                              <div className="flex justify-between"><span>平均購入価格</span><span className="text-gray-300 font-bold">{myHolding.avgBuyPrice.toFixed(4)} G</span></div>
+                              <div className="flex justify-between">
+                                <span>現在評価額</span>
+                                <span className={`font-bold ${getStockChangeColor(currentPrice, myHolding.avgBuyPrice)}`}>
+                                  {Math.floor(myHolding.shares * currentPrice).toLocaleString()} G
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span>含み損益</span>
+                                <span className={`font-black ${currentPrice >= myHolding.avgBuyPrice ? 'text-emerald-400' : 'text-red-400'}`}>
+                                  {currentPrice >= myHolding.avgBuyPrice ? '+' : ''}
+                                  {Math.floor(myHolding.shares * (currentPrice - myHolding.avgBuyPrice)).toLocaleString()} G
+                                </span>
+                              </div>
+                            </div>
+                            <div className="flex gap-2 mb-2">
+                              <input type="number" value={sellAmount} onChange={e => setSellAmount(e.target.value)}
+                                placeholder="売却株数" min="0.01" step="0.01" max={myHolding.shares}
+                                className="flex-1 bg-gray-900 text-white font-mono p-3 rounded-xl border border-gray-700 focus:outline-none focus:border-red-500" />
+                              <button onClick={() => handleSell(p.name)} disabled={!sellAmount || parseFloat(sellAmount) <= 0}
+                                className="bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white font-black px-4 rounded-xl transition active:scale-95">
+                                売却
+                              </button>
+                            </div>
+                            <button onClick={() => setSellAmount(myHolding.shares.toFixed(4))}
+                              className="w-full bg-gray-800 hover:bg-gray-700 text-gray-400 text-xs py-1.5 rounded-lg transition">
+                              全株売却
+                            </button>
+                          </>
+                        ) : (
+                          <div className="text-gray-600 text-sm text-center py-8 bg-gray-900 rounded-xl border border-gray-800">
+                            この株を保有していません
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ポートフォリオタブ */}
+      {tab === 'PORTFOLIO' && (
+        <div>
+          {myHoldings.length === 0 ? (
+            <div className="text-center py-20">
+              <BarChart2 size={48} className="text-gray-700 mx-auto mb-4" />
+              <p className="text-gray-500 font-bold">保有株式はまだありません</p>
+              <p className="text-gray-600 text-sm">マーケットタブで株を購入しましょう</p>
+            </div>
+          ) : (
+            <>
+              {/* サマリーカード */}
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 text-center">
+                  <span className="text-xs text-gray-400 font-bold block mb-1">評価総額</span>
+                  <span className="text-xl font-mono font-black text-teal-400">{Math.floor(totalPortfolioValue).toLocaleString()} G</span>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 text-center">
+                  <span className="text-xs text-gray-400 font-bold block mb-1">投資総額</span>
+                  <span className="text-xl font-mono font-black text-gray-300">{Math.floor(totalCost).toLocaleString()} G</span>
+                </div>
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 text-center">
+                  <span className="text-xs text-gray-400 font-bold block mb-1">含み損益</span>
+                  <span className={`text-xl font-mono font-black ${totalPortfolioValue >= totalCost ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {totalPortfolioValue >= totalCost ? '+' : ''}{Math.floor(totalPortfolioValue - totalCost).toLocaleString()} G
+                  </span>
+                </div>
+              </div>
+
+              {/* 保有株一覧 */}
+              <div className="space-y-3">
+                {myHoldings.map(([targetName, holding]) => {
+                  const stock = stockPrices[targetName];
+                  const currentPrice = stock?.currentPrice || holding.avgBuyPrice;
+                  const currentValue = Math.floor(holding.shares * currentPrice);
+                  const cost = Math.floor(holding.shares * holding.avgBuyPrice);
+                  const profit = currentValue - cost;
+                  const trend = getStockTrend(stock?.priceHistory);
+
+                  return (
+                    <div key={targetName} className="bg-gray-900 border border-gray-800 rounded-2xl p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-600 to-cyan-700 flex items-center justify-center font-black text-white">
+                            {targetName.charAt(0)}
+                          </div>
+                          <div>
+                            <span className="text-white font-black text-lg">{targetName}</span>
+                            <div className="text-gray-500 text-xs">{holding.shares.toFixed(2)} 株保有</div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <div className={`text-2xl font-black font-mono ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {profit >= 0 ? '+' : ''}{profit.toLocaleString()} G
+                          </div>
+                          <div className={`text-xs font-bold ${trend >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            {trend >= 0 ? '▲' : '▼'} {Math.abs(trend).toFixed(1)}%
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3 mb-3 text-xs">
+                        <div className="bg-gray-950 rounded-xl p-3 text-center">
+                          <span className="text-gray-500 block mb-1">取得単価</span>
+                          <span className="text-white font-mono font-bold">{holding.avgBuyPrice.toFixed(4)}</span>
+                        </div>
+                        <div className="bg-gray-950 rounded-xl p-3 text-center">
+                          <span className="text-gray-500 block mb-1">現在株価</span>
+                          <span className={`font-mono font-bold ${currentPrice >= holding.avgBuyPrice ? 'text-emerald-400' : 'text-red-400'}`}>{currentPrice.toFixed(4)}</span>
+                        </div>
+                        <div className="bg-gray-950 rounded-xl p-3 text-center">
+                          <span className="text-gray-500 block mb-1">評価額</span>
+                          <span className="text-teal-400 font-mono font-bold">{currentValue.toLocaleString()} G</span>
+                        </div>
+                      </div>
+
+                      {/* ミニチャート */}
+                      <div className="mb-3 bg-gray-950 rounded-xl p-3">
+                        <MiniChart history={stock?.priceHistory} color={profit >= 0 ? '#34d399' : '#f87171'} />
+                      </div>
+
+                      {/* 売却 */}
+                      <div className="flex gap-2">
+                        <input type="number" value={selectedPlayer === targetName ? sellAmount : ''}
+                          onChange={e => { setSelectedPlayer(targetName); setSellAmount(e.target.value); }}
+                          onFocus={() => setSelectedPlayer(targetName)}
+                          placeholder={`売却株数 (最大 ${holding.shares.toFixed(2)})`} step="0.01"
+                          className="flex-1 bg-gray-950 text-white font-mono text-sm p-3 rounded-xl border border-gray-700 focus:outline-none focus:border-red-500" />
+                        <button onClick={() => { setSelectedPlayer(targetName); setSellAmount(holding.shares.toFixed(4)); }}
+                          className="bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs font-bold px-3 rounded-xl transition">
+                          全株
+                        </button>
+                        <button onClick={() => handleSell(targetName)}
+                          disabled={selectedPlayer !== targetName || !sellAmount || parseFloat(sellAmount) <= 0}
+                          className="bg-red-700 hover:bg-red-600 disabled:opacity-40 text-white font-black px-4 rounded-xl transition active:scale-95">
+                          売却
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1970,19 +2496,8 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
                     <div className={`font-black text-2xl ${lv.color}`}>+{lv.reward.toLocaleString()} G</div>
                   </div>
                 </div>
-                <div className="mt-3 w-full bg-gray-900/50 rounded-full h-1.5">
-                  <div className="h-1.5 rounded-full bg-current opacity-30" style={{width: `${(lv.mines / (lv.rows * lv.cols)) * 100}%`}}></div>
-                </div>
-                <div className="text-xs text-gray-600 mt-1">地雷密度 {Math.round((lv.mines / (lv.rows * lv.cols)) * 100)}%</div>
               </button>
             ))}
-          </div>
-          <div className="mt-6 bg-gray-900/50 border border-gray-800 rounded-2xl p-4 text-xs text-gray-400 space-y-1">
-            <p className="text-gray-300 font-bold mb-2">📖 遊び方</p>
-            <p>・マスをクリックして掘り進めます。数字は周囲の地雷数。</p>
-            <p>・右クリック（長押し）でフラグを立てられます。</p>
-            <p>・全ての安全なマスを開けるとクリア！報酬を獲得。</p>
-            <p>・地雷を踏むと即爆発！参加費も報酬も没収されます。</p>
           </div>
         </div>
       )}
@@ -2025,9 +2540,6 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
               })}
             </div>
           </div>
-          <div className="mt-4 text-xs text-gray-500 text-center">
-            右クリック（モバイルは長押し）でフラグ設置 ／ フラグ残り {lvl.mines - flagged.filter(Boolean).length} 個
-          </div>
         </div>
       )}
 
@@ -2038,37 +2550,9 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
             <h3 className={`text-4xl font-black mb-2 ${gameResult === 'WIN' ? 'text-amber-400' : 'text-red-400'}`}>
               {gameResult === 'WIN' ? '採掘成功！' : '爆発！！'}
             </h3>
-            <p className="text-gray-400 mb-4">{lvl.label} / {elapsedTime}秒</p>
-            {gameResult === 'WIN' && (
-              <div>
-                <div className="text-5xl font-black text-emerald-400 mb-2">+{lvl.reward.toLocaleString()} G</div>
-                <p className="text-gray-400 text-sm">採掘報酬を獲得しました！</p>
-              </div>
-            )}
-            {gameResult === 'LOSE' && (
-              <div>
-                <div className="text-3xl font-black text-red-400 mb-2">参加費 {lvl.cost.toLocaleString()} G 没収</div>
-                <p className="text-gray-400 text-sm">地雷を踏んでしまいました...</p>
-              </div>
-            )}
+            {gameResult === 'WIN' && <div className="text-5xl font-black text-emerald-400 mb-2">+{lvl.reward.toLocaleString()} G</div>}
+            {gameResult === 'LOSE' && <div className="text-3xl font-black text-red-400 mb-2">参加費 {lvl.cost.toLocaleString()} G 没収</div>}
           </div>
-          {board.length > 0 && (
-            <div className="bg-gray-900 border border-gray-700 rounded-2xl p-3 mb-6 overflow-auto">
-              <p className="text-xs text-gray-500 mb-2">地雷の場所</p>
-              <div style={{display: 'grid', gridTemplateColumns: `repeat(${lvl.cols}, 1fr)`, gap: '2px'}}>
-                {board.map((cell, idx) => {
-                  const isExploded = idx === explodedCell;
-                  const isRev = revealed[idx];
-                  return (
-                    <div key={idx} className={`w-7 h-7 flex items-center justify-center text-xs font-black rounded
-                      ${isExploded ? 'bg-red-600' : cell === -1 ? 'bg-gray-800 text-red-400' : isRev ? 'bg-gray-800 text-gray-400' : 'bg-gray-700 text-gray-500'}`}>
-                      {isExploded ? '💥' : cell === -1 ? '💣' : isRev && cell > 0 ? cell : ''}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
           <div className="flex gap-4">
             <button onClick={() => { setPhase('SELECT'); setSelectedLevel(null); }} className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-4 rounded-xl font-bold transition">レベル選択へ</button>
             <button onClick={() => startGame(selectedLevel)} disabled={balance < lvl.cost} className={`flex-1 text-white py-4 rounded-xl font-black transition disabled:opacity-40 ${gameResult === 'WIN' ? 'bg-amber-600 hover:bg-amber-500' : 'bg-red-700 hover:bg-red-600'}`}>
@@ -2081,10 +2565,10 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
   );
 }
 
-import React, { useState } from 'react';
-import { ArrowLeft, RefreshCw } from 'lucide-react'; // アイコンライブラリは環境に合わせてください
-
-export default function RouletteView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
+// ==========================================
+// Component: RouletteView
+// ==========================================
+function RouletteView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
   const ROULETTE_ZONES = [
     { value: 1, label: '×1', color: '#16a34a', bgClass: 'bg-green-600', textClass: 'text-green-400', borderClass: 'border-green-500', glowClass: 'shadow-green-500/40', weight: 12 },
     { value: 3, label: '×3', color: '#2563eb', bgClass: 'bg-blue-600', textClass: 'text-blue-400', borderClass: 'border-blue-500', glowClass: 'shadow-blue-500/40', weight: 9 },
@@ -2102,11 +2586,11 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
     return arr;
   }, []);
 
-  const TOTAL_SLOTS = WHEEL_SLOTS.length; // 33
+  const TOTAL_SLOTS = WHEEL_SLOTS.length;
 
   const [bets, setBets] = useState({ 1: 0, 3: 0, 5: 0, 10: 0, 20: 0 });
   const [betInput, setBetInput] = useState({ 1: '', 3: '', 5: '', 10: '', 20: '' });
-  const [phase, setPhase] = useState('BETTING'); // BETTING | SPINNING | RESULT | WAIT
+  const [phase, setPhase] = useState('BETTING');
   const [resultZone, setResultZone] = useState(null);
   const [winAmount, setWinAmount] = useState(0);
   const [totalBetAmount, setTotalBetAmount] = useState(0);
@@ -2133,7 +2617,6 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
 
     ctx.clearRect(0, 0, W, H);
 
-    // 外枠リング
     ctx.beginPath();
     ctx.arc(cx, cy, R + 8, 0, Math.PI * 2);
     ctx.fillStyle = '#1f2937';
@@ -2148,7 +2631,6 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
       const startA = currentAngle + i * sliceAngle - Math.PI / 2;
       const endA = startA + sliceAngle;
 
-      // セル背景
       ctx.beginPath();
       ctx.moveTo(cx, cy);
       ctx.arc(cx, cy, R, startA, endA);
@@ -2156,19 +2638,16 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
       ctx.fillStyle = zone.color;
       ctx.fill();
 
-      // セル境界線
       ctx.strokeStyle = 'rgba(0,0,0,0.35)';
       ctx.lineWidth = 1.2;
       ctx.stroke();
 
-      // 外縁ハイライト
       ctx.beginPath();
       ctx.arc(cx, cy, R, startA, endA);
       ctx.strokeStyle = 'rgba(255,255,255,0.12)';
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // 数字テキスト
       const midA = startA + sliceAngle / 2;
       const tx = cx + (R * 0.70) * Math.cos(midA);
       const ty = cy + (R * 0.70) * Math.sin(midA);
@@ -2185,7 +2664,6 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
       ctx.restore();
     });
 
-    // 中心ハブ
     const hubR = R * 0.16;
     const grad = ctx.createRadialGradient(cx - hubR * 0.3, cy - hubR * 0.3, 0, cx, cy, hubR);
     grad.addColorStop(0, '#374151');
@@ -2198,14 +2676,12 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // 中心アイコン
     ctx.fillStyle = '#f59e0b';
     ctx.font = `bold ${Math.floor(hubR * 1.1)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('🎡', cx, cy);
 
-    // ポインター（上部三角）- 矢印による判定箇所
     const ptrY = cy - R - 3;
     ctx.beginPath();
     ctx.moveTo(cx, ptrY + 2);
@@ -2223,17 +2699,9 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
 
   }, [WHEEL_SLOTS, TOTAL_SLOTS]);
 
-  React.useEffect(() => {
-    drawWheel(0);
-  }, [drawWheel]);
-
-  React.useEffect(() => {
-    autoRef.current = autoSpin;
-  }, [autoSpin]);
-
-  React.useEffect(() => {
-    phaseRef.current = phase;
-  }, [phase]);
+  React.useEffect(() => { drawWheel(0); }, [drawWheel]);
+  React.useEffect(() => { autoRef.current = autoSpin; }, [autoSpin]);
+  React.useEffect(() => { phaseRef.current = phase; }, [phase]);
 
   const handleBetChange = (value, inputVal) => {
     setBetInput(prev => ({ ...prev, [value]: inputVal }));
@@ -2277,122 +2745,96 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
     await updateBalance(-total);
     setTotalBetAmount(total);
     setPhase('SPINNING');
-    phaseRef.current = 'SPINNING'; 
-    setResultZone(null); 
-    setWinAmount(0); 
+    phaseRef.current = 'SPINNING';
+    setResultZone(null);
+    setWinAmount(0);
 
-    const winSlotIdx = Math.floor(Math.random() * TOTAL_SLOTS); 
-    const winValue = WHEEL_SLOTS[winSlotIdx]; 
-    const winZone = ROULETTE_ZONES.find(z => z.value === winValue); 
-    
-    // 矢印（ポインター）の位置で止まるように角度を計算
-    const sliceAngle = (Math.PI * 2) / TOTAL_SLOTS; 
-    const targetOffset = -winSlotIdx * sliceAngle + sliceAngle * 0.5 * (Math.random() - 0.5); 
-    const extraRotations = (5 + Math.floor(Math.random() * 3)) * Math.PI * 2; 
-    const targetAngle = angleRef.current + extraRotations + targetOffset - (angleRef.current % (Math.PI * 2)); 
-    
-    const startAngle = angleRef.current; 
-    const startTime = performance.now(); 
-    const duration = 4000 + Math.random() * 1500; 
+    const winSlotIdx = Math.floor(Math.random() * TOTAL_SLOTS);
+    const winValue = WHEEL_SLOTS[winSlotIdx];
+    const winZone = ROULETTE_ZONES.find(z => z.value === winValue);
 
-    const animate = (now) => { 
-      const elapsed = now - startTime; 
-      const rawT = Math.min(elapsed / duration, 1); 
-      const t = 1 - Math.pow(1 - rawT, 3); 
-      const currentAngle = startAngle + (targetAngle - startAngle) * t; 
-      
-      angleRef.current = currentAngle; 
-      drawWheel(currentAngle); 
+    const sliceAngle = (Math.PI * 2) / TOTAL_SLOTS;
+    const targetOffset = -winSlotIdx * sliceAngle + sliceAngle * 0.5 * (Math.random() - 0.5);
+    const extraRotations = (5 + Math.floor(Math.random() * 3)) * Math.PI * 2;
+    const targetAngle = angleRef.current + extraRotations + targetOffset - (angleRef.current % (Math.PI * 2));
 
-      if (rawT < 1) { 
-        animRef.current = requestAnimationFrame(animate); 
-      } else { 
-        angleRef.current = targetAngle; 
-        drawWheel(targetAngle); 
-        
-        const betOnWinner = bet[winValue] || 0; 
-        const payout = betOnWinner * winValue; 
-        
-        if (payout > 0) { 
-          updateBalance(payout); 
-        } 
-        
-        setResultZone(winZone); 
-        setWinAmount(payout); 
-        setPhase('RESULT'); 
-        phaseRef.current = 'RESULT'; 
-        
-        const histEntry = { value: winValue, payout: payout, net: payout - total, bet: total }; 
-        setSpinHistory(prev => [histEntry, ...prev].slice(0, 10)); 
-        
-        // 当落のトースト表示ロジック修正
-        if (payout > 0) { 
-          if (payout - total >= 50000) { 
-            emitNews(`🎡 ${playerName} がルーレットで大勝利！ ×${winValue}エリア当選 +${(payout - total).toLocaleString()} G！`, 'jackpot'); 
-          } 
+    const startAngle = angleRef.current;
+    const startTime = performance.now();
+    const duration = 4000 + Math.random() * 1500;
+
+    const animate = (now) => {
+      const elapsed = now - startTime;
+      const rawT = Math.min(elapsed / duration, 1);
+      const t = 1 - Math.pow(1 - rawT, 3);
+      const currentAngle = startAngle + (targetAngle - startAngle) * t;
+
+      angleRef.current = currentAngle;
+      drawWheel(currentAngle);
+
+      if (rawT < 1) {
+        animRef.current = requestAnimationFrame(animate);
+      } else {
+        angleRef.current = targetAngle;
+        drawWheel(targetAngle);
+
+        const betOnWinner = bet[winValue] || 0;
+        const payout = betOnWinner * winValue;
+
+        if (payout > 0) { updateBalance(payout); }
+
+        setResultZone(winZone);
+        setWinAmount(payout);
+        setPhase('RESULT');
+        phaseRef.current = 'RESULT';
+
+        const histEntry = { value: winValue, payout: payout, net: payout - total, bet: total };
+        setSpinHistory(prev => [histEntry, ...prev].slice(0, 10));
+
+        if (payout > 0) {
+          if (payout - total >= 50000) {
+            emitNews(`🎡 ${playerName} がルーレットで大勝利！ ×${winValue}エリア当選 +${(payout - total).toLocaleString()} G！`, 'jackpot');
+          }
           showToast(`🎡 ${winValue}エリア当選！ +${payout.toLocaleString()} G！`, 'success');
         } else {
           showToast(`😢 ${winValue}エリア…ハズレ`, 'error');
         }
 
-        if (autoRef.current) { 
-          setTimeout(() => { startWaitCountdown(bet, bal - total + payout); }, 1200); 
-        } 
-      } 
-    }; 
-    
-    animRef.current = requestAnimationFrame(animate); 
+        if (autoRef.current) {
+          setTimeout(() => { startWaitCountdown(bet, bal - total + payout); }, 1200);
+        }
+      }
+    };
+
+    animRef.current = requestAnimationFrame(animate);
   }, [bets, balance, updateBalance, WHEEL_SLOTS, TOTAL_SLOTS, drawWheel, playerName, emitNews, showToast, startWaitCountdown]);
 
-  const spin = () => {
-    if (phase !== 'BETTING') return;
-    executeSpin(bets, balance);
-  };
+  const spin = () => { if (phase !== 'BETTING') return; executeSpin(bets, balance); };
 
   const toggleAutoSpin = () => {
     const next = !autoSpin;
     setAutoSpin(next);
     autoRef.current = next;
-
     if (!next) {
       clearInterval(waitTimerRef.current);
-      if (phaseRef.current === 'WAIT') {
-        setPhase('BETTING');
-        phaseRef.current = 'BETTING';
-      }
+      if (phaseRef.current === 'WAIT') { setPhase('BETTING'); phaseRef.current = 'BETTING'; }
     } else {
-      if (phaseRef.current === 'BETTING') {
-        executeSpin(bets, balance);
-      }
+      if (phaseRef.current === 'BETTING') { executeSpin(bets, balance); }
     }
   };
 
   const resetForNextSpin = () => {
-    setPhase('BETTING');
-    phaseRef.current = 'BETTING';
-    setResultZone(null);
-    setWinAmount(0);
+    setPhase('BETTING'); phaseRef.current = 'BETTING'; setResultZone(null); setWinAmount(0);
   };
 
   React.useEffect(() => {
-    return () => {
-      if (animRef.current) cancelAnimationFrame(animRef.current);
-      clearInterval(waitTimerRef.current);
-    };
+    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); clearInterval(waitTimerRef.current); };
   }, []);
 
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
-      {/* ヘッダー */}
       <div className="w-full flex justify-between items-center mb-5">
-        <button
-          onClick={() => {
-            if (animRef.current) cancelAnimationFrame(animRef.current);
-            clearInterval(waitTimerRef.current);
-            onBack();
-          }}
-          className="flex items-center gap-2 text-gray-400 hover:text-white transition"
-        >
+        <button onClick={() => { if (animRef.current) cancelAnimationFrame(animRef.current); clearInterval(waitTimerRef.current); onBack(); }}
+          className="flex items-center gap-2 text-gray-400 hover:text-white transition">
           <ArrowLeft size={20} /> 戻る
         </button>
         <div className="bg-gray-900/95 px-5 py-2 rounded-full border border-gray-800 font-mono text-xl text-yellow-500 font-bold">
@@ -2400,83 +2842,76 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
         </div>
       </div>
 
-      {/* メインレイアウト：左=ホイール、右=ベットパネル */}
       <div className="flex flex-col xl:flex-row gap-5 items-stretch">
-        {/* ===== 左：ホイールエリア ===== */}
-        <div className="xl:w-[55%] flex flex-col gap-4"> 
-          <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 shadow-2xl p-5 flex flex-col items-center gap-4 flex-1"> 
-            <div className="relative w-full flex justify-center"> 
-              <canvas ref={canvasRef} width={480} height={480} className="w-full max-w-[480px] h-auto rounded-full border-4 border-gray-700 shadow-2xl shadow-black/40" /> 
-              
-              {phase === 'SPINNING' && ( 
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none"> 
-                  <div className="bg-black/30 rounded-full w-24 h-24 flex flex-col items-center justify-center"> 
-                    <RefreshCw className="text-yellow-400 animate-spin mb-1" size={32} /> 
-                    <span className="text-yellow-400 text-xs font-black">SPIN</span> 
-                  </div> 
-                </div> 
-              )} 
-              
-              {phase === 'WAIT' && ( 
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none"> 
-                  <div className="bg-black/50 rounded-full w-28 h-28 flex flex-col items-center justify-center border-2 border-yellow-500/40"> 
-                    <span className="text-yellow-400 text-4xl font-black leading-none">{waitCountdown}</span> 
-                    <span className="text-yellow-400/70 text-xs font-bold mt-1">次のスピン</span> 
-                  </div> 
-                </div> 
-              )} 
-            </div> 
+        <div className="xl:w-[55%] flex flex-col gap-4">
+          <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 shadow-2xl p-5 flex flex-col items-center gap-4 flex-1">
+            <div className="relative w-full flex justify-center">
+              <canvas ref={canvasRef} width={480} height={480} className="w-full max-w-[480px] h-auto rounded-full border-4 border-gray-700 shadow-2xl shadow-black/40" />
+              {phase === 'SPINNING' && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="bg-black/30 rounded-full w-24 h-24 flex flex-col items-center justify-center">
+                    <RefreshCw className="text-yellow-400 animate-spin mb-1" size={32} />
+                    <span className="text-yellow-400 text-xs font-black">SPIN</span>
+                  </div>
+                </div>
+              )}
+              {phase === 'WAIT' && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="bg-black/50 rounded-full w-28 h-28 flex flex-col items-center justify-center border-2 border-yellow-500/40">
+                    <span className="text-yellow-400 text-4xl font-black leading-none">{waitCountdown}</span>
+                    <span className="text-yellow-400/70 text-xs font-bold mt-1">次のスピン</span>
+                  </div>
+                </div>
+              )}
+            </div>
 
-            {phase === 'RESULT' && resultZone && ( 
-              <div className={`w-full max-w-[480px] p-5 rounded-2xl border-4 text-center shadow-2xl ${winAmount > 0 ? 'border-yellow-500 bg-yellow-500/10' : 'border-gray-700 bg-gray-900/80'}`}> 
-                <div className="flex items-center justify-center gap-4 flex-wrap"> 
-                  <div> 
-                    <div className={`text-2xl font-black ${resultZone.textClass}`}> {resultZone.value} エリア当選 </div> 
-                    <div className="text-gray-400 text-sm">評価倍率 <span className={`font-black ${resultZone.textClass}`}>×{resultZone.value}</span></div> 
-                  </div> 
-                  {winAmount > 0 ? ( 
-                    <div className="text-right"> 
-                      <div className="text-3xl font-black text-emerald-400">+{winAmount.toLocaleString()} G</div> 
-                      <div className={`text-sm font-bold ${winAmount - totalBetAmount >= 0 ? 'text-emerald-400' : 'text-red-400'}`}> 
-                        純損益 {winAmount - totalBetAmount >= 0 ? '+' : ''}{(winAmount - totalBetAmount).toLocaleString()} G 
-                      </div> 
-                    </div> 
-                  ) : ( 
-                    <div> 
-                      <div className="text-2xl font-black text-red-400">ハズレ</div> 
-                      <div className="text-red-400 text-sm">-{totalBetAmount.toLocaleString()} G</div> 
-                    </div> 
-                  )} 
-                </div> 
-                {!autoSpin && ( 
-                  <div className="flex gap-3 mt-4"> 
-                    <button onClick={resetForNextSpin} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-2.5 rounded-xl transition active:scale-95"> もう一度！ </button> 
-                    <button onClick={onBack} className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2.5 rounded-xl font-bold transition">終了</button> 
-                  </div> 
-                )} 
-                {autoSpin && ( 
-                  <div className="mt-3 text-yellow-400/70 text-sm font-bold animate-pulse"> 
-                    {waitCountdown > 0 ? `${waitCountdown}秒後次のスピン...` : '準備中...'} 
-                  </div> 
-                )} 
-              </div> 
-            )} 
+            {phase === 'RESULT' && resultZone && (
+              <div className={`w-full max-w-[480px] p-5 rounded-2xl border-4 text-center shadow-2xl ${winAmount > 0 ? 'border-yellow-500 bg-yellow-500/10' : 'border-gray-700 bg-gray-900/80'}`}>
+                <div className="flex items-center justify-center gap-4 flex-wrap">
+                  <div>
+                    <div className={`text-2xl font-black ${resultZone.textClass}`}>{resultZone.value} エリア当選</div>
+                    <div className="text-gray-400 text-sm">評価倍率 <span className={`font-black ${resultZone.textClass}`}>×{resultZone.value}</span></div>
+                  </div>
+                  {winAmount > 0 ? (
+                    <div className="text-right">
+                      <div className="text-3xl font-black text-emerald-400">+{winAmount.toLocaleString()} G</div>
+                      <div className={`text-sm font-bold ${winAmount - totalBetAmount >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                        純損益 {winAmount - totalBetAmount >= 0 ? '+' : ''}{(winAmount - totalBetAmount).toLocaleString()} G
+                      </div>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-2xl font-black text-red-400">ハズレ</div>
+                      <div className="text-red-400 text-sm">-{totalBetAmount.toLocaleString()} G</div>
+                    </div>
+                  )}
+                </div>
+                {!autoSpin && (
+                  <div className="flex gap-3 mt-4">
+                    <button onClick={resetForNextSpin} className="flex-1 bg-yellow-600 hover:bg-yellow-500 text-black font-black py-2.5 rounded-xl transition active:scale-95">もう一度！</button>
+                    <button onClick={onBack} className="flex-1 bg-gray-800 hover:bg-gray-700 text-white py-2.5 rounded-xl font-bold transition">終了</button>
+                  </div>
+                )}
+                {autoSpin && (
+                  <div className="mt-3 text-yellow-400/70 text-sm font-bold animate-pulse">
+                    {waitCountdown > 0 ? `${waitCountdown}秒後次のスピン...` : '準備中...'}
+                  </div>
+                )}
+              </div>
+            )}
 
-            {spinHistory.length > 0 && ( 
-              <div className="w-full max-w-[480px] bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden"> 
-                <div className="px-4 py-2 border-b border-gray-800 text-xs font-black text-gray-400 tracking-widest flex items-center justify-between"> 
-                  <span>スピン履歴</span> 
-                  <span className="text-gray-600">{spinHistory.length} 回</span> 
-                </div> 
-                <div className="flex flex-wrap gap-2 p-3"> 
-                  {spinHistory.map((h, i) => { 
+            {spinHistory.length > 0 && (
+              <div className="w-full max-w-[480px] bg-gray-900/80 border border-gray-800 rounded-2xl overflow-hidden">
+                <div className="px-4 py-2 border-b border-gray-800 text-xs font-black text-gray-400 tracking-widest flex items-center justify-between">
+                  <span>スピン履歴</span>
+                  <span className="text-gray-600">{spinHistory.length} 回</span>
+                </div>
+                <div className="flex flex-wrap gap-2 p-3">
+                  {spinHistory.map((h, i) => {
                     const zone = ROULETTE_ZONES.find(z => z.value === h.value);
                     return (
-                      <div key={i}
-                        className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-black shadow-md border-2 ${zone.borderClass} ${h.net >= 0 ? 'ring-1 ring-emerald-500/50' : ''}`}
-                        style={{ backgroundColor: zone.color }}
-                        title={`${h.net >= 0 ? '+' : ''}${h.net.toLocaleString()} G`}
-                      >
+                      <div key={i} className={`w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-black shadow-md border-2 ${zone.borderClass} ${h.net >= 0 ? 'ring-1 ring-emerald-500/50' : ''}`}
+                        style={{ backgroundColor: zone.color }} title={`${h.net >= 0 ? '+' : ''}${h.net.toLocaleString()} G`}>
                         {h.value}
                       </div>
                     );
@@ -2487,7 +2922,6 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
           </div>
         </div>
 
-        {/* ===== 右：ベットパネル ===== */}
         <div className="xl:w-[45%] flex flex-col">
           <div className="bg-gradient-to-b from-gray-900 to-gray-950 rounded-3xl border border-gray-800 p-5 shadow-2xl flex flex-col flex-1">
             <h3 className="text-xl font-black text-white mb-0.5">🎡 ROULETTE BET</h3>
@@ -2511,36 +2945,33 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
                     )}
                   </div>
                   <div className="relative mb-1.5">
-                    <input
-                      type="number"
-                      value={betInput[zone.value]} 
-                      onChange={e => handleBetChange(zone.value, e.target.value)} 
-                      placeholder="0" 
-                      disabled={phase !== 'BETTING'} 
-                      className="w-full bg-gray-900 text-white font-mono text-base p-2 pr-10 rounded-lg border border-gray-700 focus:outline-none focus:border-yellow-500 disabled:opacity-50" 
-                      min="0" step="100" 
-                    /> 
-                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 text-xs font-bold">G</span> 
-                  </div> 
-                  <div className="flex gap-1.5"> 
-                    {[100, 500, 1000, 5000].map(v => ( 
-                      <button key={v} onClick={() => handleBetChange(zone.value, (bets[zone.value] + v).toString())} disabled={phase !== 'BETTING'} className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs py-1 rounded transition disabled:opacity-40"> 
-                        +{v >= 1000 ? v / 1000 + 'K' : v} 
-                      </button> 
-                    ))} 
-                  </div> 
-                </div> 
-              ))} 
-            </div> 
+                    <input type="number" value={betInput[zone.value]} onChange={e => handleBetChange(zone.value, e.target.value)}
+                      placeholder="0" disabled={phase !== 'BETTING'}
+                      className="w-full bg-gray-900 text-white font-mono text-base p-2 pr-10 rounded-lg border border-gray-700 focus:outline-none focus:border-yellow-500 disabled:opacity-50"
+                      min="0" step="100" />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-600 text-xs font-bold">G</span>
+                  </div>
+                  <div className="flex gap-1.5">
+                    {[100, 500, 1000, 5000].map(v => (
+                      <button key={v} onClick={() => handleBetChange(zone.value, (bets[zone.value] + v).toString())} disabled={phase !== 'BETTING'}
+                        className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-400 hover:text-white text-xs py-1 rounded transition disabled:opacity-40">
+                        +{v >= 1000 ? v / 1000 + 'K' : v}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
 
-            <div className="border-t border-gray-800 pt-4 space-y-3"> 
-              <div className="flex justify-between items-center"> 
-                <span className="text-gray-400 text-sm font-bold">合計ベット金</span> 
-                <span className="font-mono text-xl font-black text-yellow-400">{totalBet.toLocaleString()} G</span> 
-              </div> 
-              <div className="flex gap-2"> 
-                <button onClick={clearBets} disabled={phase !== 'BETTING'} className="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-4 rounded-xl transition disabled:opacity-40 active:scale-95 text-sm whitespace-nowrap"> クリア </button> 
-                <button onClick={spin} disabled={phase !== 'BETTING' || totalBet <= 0 || totalBet > balance} className="flex-1 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-black py-3 rounded-xl text-lg shadow-lg shadow-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-2">
+            <div className="border-t border-gray-800 pt-4 space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-gray-400 text-sm font-bold">合計ベット金</span>
+                <span className="font-mono text-xl font-black text-yellow-400">{totalBet.toLocaleString()} G</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={clearBets} disabled={phase !== 'BETTING'} className="bg-gray-800 hover:bg-gray-700 text-gray-300 font-bold py-3 px-4 rounded-xl transition disabled:opacity-40 active:scale-95 text-sm whitespace-nowrap">クリア</button>
+                <button onClick={spin} disabled={phase !== 'BETTING' || totalBet <= 0 || totalBet > balance}
+                  className="flex-1 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 text-white font-black py-3 rounded-xl text-lg shadow-lg shadow-red-500/20 disabled:opacity-50 disabled:cursor-not-allowed transition-all transform hover:scale-[1.02] active:scale-95 flex items-center justify-center gap-2">
                   {phase === 'SPINNING' ? (
                     <><RefreshCw size={18} className="animate-spin" /> SPINNING...</>
                   ) : phase === 'WAIT' ? (
@@ -2549,26 +2980,12 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
                 </button>
               </div>
 
-              <button
-                onClick={toggleAutoSpin}
+              <button onClick={toggleAutoSpin}
                 className={`w-full py-3 rounded-xl font-black text-sm transition-all border-2 flex items-center justify-center gap-2 ${
-                  autoSpin
-                    ? 'bg-orange-600/20 border-orange-500 text-orange-400 hover:bg-orange-600/30'
-                    : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-gray-600'
-                }`}>
+                  autoSpin ? 'bg-orange-600/20 border-orange-500 text-orange-400 hover:bg-orange-600/30' : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700 hover:border-gray-600'}`}>
                 <RefreshCw size={16} className={autoSpin ? 'animate-spin' : ''} />
-                {autoSpin ? (
-                  phase === 'WAIT'
-                    ? `オートスピン ON — ${waitCountdown}秒後に次のスピン`
-                    : 'オートスピン ON — クリックでOFF'
-                ) : 'オートスピン OFF — クリックでON'}
+                {autoSpin ? (phase === 'WAIT' ? `オートスピン ON — ${waitCountdown}秒後に次のスピン` : 'オートスピン ON — クリックでOFF') : 'オートスピン OFF — クリックでON'}
               </button>
-              
-              {autoSpin && (
-                <div className="text-xs text-gray-500 text-center">
-                  ※ スピン後9秒の待機時間があります。賭け金は変更不可。
-                </div>
-              )}
 
               <div className="bg-gray-950 rounded-xl border border-gray-800 p-3">
                 <p className="text-gray-500 text-xs font-black tracking-widest mb-2 text-center">PAYTABLE</p>
@@ -2586,7 +3003,6 @@ export default function RouletteView({ balance, updateBalance, onBack, showToast
                     </div>
                   ))}
                 </div>
-                <p className="text-gray-600 text-xs mt-2 text-center">※ 複数エリアへの同時ベット可能</p>
               </div>
             </div>
           </div>

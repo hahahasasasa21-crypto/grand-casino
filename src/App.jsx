@@ -96,8 +96,6 @@ async function postNews(db, appId, message, type = 'info') {
 }
 
 // ==================== 投資ユーティリティ ====================
-// gambleNet: ギャンブル・労働による純損益（正=利益, 負=損失）
-// 株価変動率: gambleNet / baseInvestment * 0.5 (最大±50%/回)
 async function updateStockPriceForTarget(db, appId, targetName, gambleNet) {
   try {
     const safeTarget = encodeURIComponent(targetName);
@@ -106,7 +104,6 @@ async function updateStockPriceForTarget(db, appId, targetName, gambleNet) {
     if (!snap.exists()) return;
     const data = snap.data();
     const base = data.baseInvestment || 1;
-    // 変動率: 損益/基準額 * 50%、上限±80%
     let changeRate = Math.max(-0.8, Math.min(0.8, (gambleNet / base) * 0.5));
     const newPrice = Math.max(0.01, (data.currentPrice || 1.0) * (1 + changeRate));
     const priceHistory = [...(data.priceHistory || []), { price: newPrice, at: Date.now() }].slice(-50);
@@ -202,6 +199,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [user, playerName, bankBalance]);
 
+  // ▼▼▼ 修正①：ローン利息タイマーで信用度を毎回-1 ▼▼▼
   useEffect(() => {
     if (!user || !playerName || loanBalance <= 0) return;
     const timer = setInterval(() => {
@@ -209,8 +207,11 @@ export default function App() {
       const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeName);
       const interest = Math.floor(loanBalance * LOAN_INTEREST_RATE);
       if (interest > 0) {
-        updateDoc(docRef, { loanBalance: increment(interest) });
-        showToast(`💸 ローン利息 +${interest.toLocaleString()} G！`, 'warning');
+        updateDoc(docRef, {
+          loanBalance: increment(interest),
+          creditScore: increment(-1),   // ← 追加：時間経過ごとに信用度-1
+        });
+        showToast(`💸 ローン利息 +${interest.toLocaleString()} G！ 信用度 -1`, 'warning');
       }
     }, LOAN_INTERVAL);
     return () => clearInterval(timer);
@@ -260,8 +261,13 @@ export default function App() {
       let loan = data.loanBalance, total = 0;
       for (let i = 0; i < periods; i++) { const int = Math.floor(loan * LOAN_INTEREST_RATE); total += int; loan += int; }
       if (total > 0) {
-        await updateDoc(docRef, { loanBalance: increment(total), lastLoanTime: now });
-        showToast(`💸 不在中にローン利息 +${total.toLocaleString()} G！`, 'warning');
+        // ▼ オフライン分の信用度ダウンも反映
+        await updateDoc(docRef, {
+          loanBalance: increment(total),
+          lastLoanTime: now,
+          creditScore: increment(-periods),  // 不在中の各期間ぶん-1ずつ
+        });
+        showToast(`💸 不在中にローン利息 +${total.toLocaleString()} G！ 信用度 -${periods}`, 'warning');
       }
     }
   };
@@ -272,12 +278,10 @@ export default function App() {
     await updateDoc(docRef, { balance: increment(amount) });
   };
 
-  // ギャンブル・労働専用updateBalance（株価連動あり）
   const updateBalanceWithStock = async (amount) => {
     const safeName = encodeURIComponent(playerName);
     const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeName);
     await updateDoc(docRef, { balance: increment(amount) });
-    // 株価更新（投資されている場合のみ）
     if (amount !== 0) {
       await updateStockPriceForTarget(db, appId, playerName, amount);
     }
@@ -314,12 +318,6 @@ export default function App() {
     } catch(e) { console.error(e); }
     setPlayerName(inputName.trim());
     setView('MENU');
-  };
-
-  const claimRelief = () => {
-    if (balance < 100 && bankBalance < 100) {
-      updateBalance(1000); showToast("【救済】1000Gを受け取りました！", 'success');
-    } else showToast("まだ資産があります！", 'error');
   };
 
   const handleBankAction = async (action) => {
@@ -364,6 +362,7 @@ export default function App() {
     setLoanInput('');
   };
 
+  // ▼▼▼ 修正②：ローン返済で信用度UP（+15）▼▼▼
   const handleRepay = async () => {
     const amount = parseInt(loanInput);
     if (isNaN(amount) || amount <= 0) { showToast("有効な数値を入力してください。", 'error'); return; }
@@ -374,9 +373,9 @@ export default function App() {
     await updateDoc(docRef, {
       balance: increment(-amount),
       loanBalance: increment(-amount),
-      creditScore: increment(-15)
+      creditScore: increment(15)   // ← 変更：-15 → +15
     });
-    showToast(`✅ ${amount.toLocaleString()} G 返済！信用度 -15`, 'warning');
+    showToast(`✅ ${amount.toLocaleString()} G 返済！信用度 +15`, 'success');
     setLoanInput('');
   };
 
@@ -629,7 +628,6 @@ export default function App() {
                     </div>
                     <ChevronRight className="text-gray-500" size={20} />
                   </button>
-                  {/* 投資ボタン */}
                   <button onClick={() => setView('INVEST')} className="flex items-center justify-between p-5 bg-gray-900 hover:bg-gray-800 rounded-2xl border border-teal-800/50 transition transform hover:scale-[1.02]">
                     <div className="flex items-center gap-3">
                       <div className="p-3 bg-teal-500/10 rounded-xl text-teal-400"><TrendingUp size={22} /></div>
@@ -646,8 +644,8 @@ export default function App() {
                   </button>
                 </div>
 
-                {/* 純資産・救済 */}
-                <div className="bg-gray-900/50 p-5 rounded-2xl border border-gray-800/80 flex flex-col sm:flex-row justify-between items-center gap-4">
+                {/* ▼▼▼ 修正③：救済資金ボタンを削除（純資産表示のみ残す）▼▼▼ */}
+                <div className="bg-gray-900/50 p-5 rounded-2xl border border-gray-800/80 flex justify-center items-center">
                   <div className="flex gap-8">
                     <div className="text-center">
                       <span className="text-xs text-gray-400 uppercase font-bold tracking-widest block mb-1">純資産</span>
@@ -658,11 +656,6 @@ export default function App() {
                       <span className={`text-2xl font-black font-mono ${getCreditColor(creditScore)}`}>{getCreditLabel(creditScore)} ({Math.floor(creditScore)})</span>
                     </div>
                   </div>
-                  {balance < 100 && bankBalance < 100 && (
-                    <button onClick={claimRelief} className="bg-red-500/10 text-red-400 hover:bg-red-500 hover:text-white px-5 py-2.5 rounded-xl text-sm font-bold border border-red-500/30 transition">
-                      救済資金 1,000G を申請する
-                    </button>
-                  )}
                 </div>
               </div>
 
@@ -730,7 +723,7 @@ export default function App() {
                 <div className="p-4 bg-emerald-500/10 rounded-2xl text-emerald-400"><Landmark size={32} /></div>
                 <div>
                   <h2 className="text-3xl font-black text-white">GRAND BANK</h2>
-                  <p className="text-sm text-emerald-400 font-semibold">預金: 30分 +0.1% ／ ローン: 15分 +0.3%</p>
+                  <p className="text-sm text-emerald-400 font-semibold">預金: 30分 +0.1% ／ ローン: 15分 +0.3%（信用度-1）</p>
                 </div>
               </div>
               <div className="bg-gray-950 p-5 rounded-2xl border border-gray-800 mb-4">
@@ -751,11 +744,12 @@ export default function App() {
                   <p className="text-gray-400 font-bold mb-1">📈 信用度UP</p>
                   <p className="text-emerald-400">・1万G以上預金 <span className="text-white font-bold">+1</span></p>
                   <p className="text-emerald-400">・5万G以上預金 <span className="text-white font-bold">+3</span></p>
+                  <p className="text-emerald-400">・ローン返済 <span className="text-white font-bold">+15</span></p>
                 </div>
                 <div className="space-y-1">
                   <p className="text-gray-400 font-bold mb-1">📉 信用度DOWN</p>
                   <p className="text-red-400">・ローン借入 <span className="text-white font-bold">-5</span></p>
-                  <p className="text-red-400">・ローン返済 <span className="text-white font-bold">-15</span></p>
+                  <p className="text-red-400">・ローン利息発生 <span className="text-white font-bold">-1/回</span></p>
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-3 mb-6">
@@ -792,9 +786,9 @@ export default function App() {
                 </div>
                 <div className="flex gap-3">
                   <button onClick={handleLoan} className="flex-1 bg-red-700 hover:bg-red-600 text-white py-3 rounded-xl font-black transition active:scale-95">借入する（信用度-5）</button>
-                  <button onClick={handleRepay} disabled={loanBalance <= 0} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white py-3 rounded-xl font-black transition active:scale-95 disabled:opacity-40">返済する（信用度-15）</button>
+                  <button onClick={handleRepay} disabled={loanBalance <= 0} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white py-3 rounded-xl font-black transition active:scale-95 disabled:opacity-40">返済する（信用度+15）</button>
                 </div>
-                <p className="text-xs text-gray-600 mt-3 text-center">※借入は15分毎0.3%利息・預金は30分毎0.1%利息</p>
+                <p className="text-xs text-gray-600 mt-3 text-center">※借入は15分毎0.3%利息（信用度-1）・預金は30分毎0.1%利息</p>
               </div>
             </div>
           </div>
@@ -894,15 +888,14 @@ export default function App() {
 // ==========================================
 function InvestView({ balance, updateBalance, onBack, showToast, playerName, emitNews, db, appId }) {
   const [players, setPlayers] = useState([]);
-  const [myStocks, setMyStocks] = useState({}); // { targetName: { shares, avgBuyPrice } }
-  const [stockPrices, setStockPrices] = useState({}); // { targetName: { currentPrice, priceHistory, baseInvestment } }
+  const [myStocks, setMyStocks] = useState({});
+  const [stockPrices, setStockPrices] = useState({});
   const [selectedPlayer, setSelectedPlayer] = useState(null);
   const [investAmount, setInvestAmount] = useState('');
   const [sellAmount, setSellAmount] = useState('');
-  const [tab, setTab] = useState('MARKET'); // MARKET | PORTFOLIO
+  const [tab, setTab] = useState('MARKET');
   const [loading, setLoading] = useState(true);
 
-  // 全プレイヤー一覧を取得
   useEffect(() => {
     const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
     const unsub = onSnapshot(collRef, snap => {
@@ -918,7 +911,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
     return () => unsub();
   }, []);
 
-  // 株価データ購読
   useEffect(() => {
     const stocksRef = collection(db, 'artifacts', appId, 'public', 'data', 'stocks');
     const unsub = onSnapshot(stocksRef, snap => {
@@ -931,7 +923,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
     return () => unsub();
   }, []);
 
-  // 自分の保有株購読
   useEffect(() => {
     const safeMe = encodeURIComponent(playerName);
     const portfolioRef = doc(db, 'artifacts', appId, 'public', 'data', 'portfolios', safeMe);
@@ -942,7 +933,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
     return () => unsub();
   }, [playerName]);
 
-  // 株式を購入する
   const handleBuy = async () => {
     const amount = parseInt(investAmount);
     if (!selectedPlayer) { showToast('投資先を選んでください', 'error'); return; }
@@ -953,11 +943,9 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
     const safeMe = encodeURIComponent(playerName);
 
     try {
-      // 1. 投資先プレイヤーに10%が配当
       const dividend = Math.floor(amount * 0.1);
-      const investedAmount = amount - dividend; // 90%が株券の価値に
+      const investedAmount = amount - dividend;
 
-      // 2. 株価テーブルを取得/作成
       const stockRef = doc(db, 'artifacts', appId, 'public', 'data', 'stocks', safeTarget);
       const stockSnap = await getDoc(stockRef);
 
@@ -972,22 +960,18 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
         totalShares = sd.totalShares || 0;
       }
 
-      // 株数 = 投資額(90%) / 現在の株価
       const sharesBought = investedAmount / currentPrice;
       const newTotalShares = totalShares + sharesBought;
 
-      // 3. 自分の残高を減らす
       const selfRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeMe);
       await updateDoc(selfRef, { balance: increment(-amount) });
 
-      // 4. 投資先に10%を送る
       const targetRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeTarget);
       const targetSnap = await getDoc(targetRef);
       if (targetSnap.exists()) {
         await updateDoc(targetRef, { balance: increment(dividend) });
       }
 
-      // 5. 株価データを更新
       const priceHistory = stockSnap.exists() ? [...(stockSnap.data().priceHistory || []), { price: currentPrice, at: Date.now() }].slice(-50) : [{ price: 1.0, at: Date.now() }];
       await setDoc(stockRef, {
         targetName: selectedPlayer,
@@ -998,7 +982,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
         lastUpdated: Date.now(),
       }, { merge: true });
 
-      // 6. 自分のポートフォリオを更新
       const portfolioRef = doc(db, 'artifacts', appId, 'public', 'data', 'portfolios', safeMe);
       const portSnap = await getDoc(portfolioRef);
       const holdings = portSnap.exists() ? (portSnap.data().holdings || {}) : {};
@@ -1017,7 +1000,13 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
     }
   };
 
-  // 株式を売却する
+  // ▼▼▼ 修正④：株売却バグ修正 ▼▼▼
+  // 問題：setDoc で holdings オブジェクト全体を上書きする際、
+  //       myStocks（Firestoreからの最新state）をベースにせず
+  //       ローカルの newHoldings を構築していたため、
+  //       onSnapshot の非同期タイミングによって古い holdings が残ることがあった。
+  // 修正：売却前に portfolioRef を getDoc で再取得し、
+  //       最新の holdings をベースに売却後の状態を計算してから setDoc する。
   const handleSell = async (targetName) => {
     const sharesToSell = parseFloat(sellAmount);
     const holding = myStocks[targetName];
@@ -1040,16 +1029,25 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
       const selfRef = doc(db, 'artifacts', appId, 'public', 'data', 'players', safeMe);
       await updateDoc(selfRef, { balance: increment(sellValue) });
 
-      // 株数を更新
+      // ★ 修正：Firestoreから最新のポートフォリオを再取得してから更新
       const portfolioRef = doc(db, 'artifacts', appId, 'public', 'data', 'portfolios', safeMe);
-      const newShares = holding.shares - sharesToSell;
-      const newHoldings = { ...myStocks };
-      if (newShares < 0.001) {
-        delete newHoldings[targetName];
-      } else {
-        newHoldings[targetName] = { ...holding, shares: newShares };
+      const portSnap = await getDoc(portfolioRef);
+      const latestHoldings = portSnap.exists() ? { ...(portSnap.data().holdings || {}) } : {};
+
+      const latestHolding = latestHoldings[targetName];
+      if (!latestHolding) {
+        showToast('保有株データが見つかりません', 'error'); return;
       }
-      await setDoc(portfolioRef, { holdings: newHoldings }, { merge: true });
+
+      const newShares = latestHolding.shares - sharesToSell;
+      if (newShares < 0.001) {
+        delete latestHoldings[targetName];
+      } else {
+        latestHoldings[targetName] = { ...latestHolding, shares: newShares };
+      }
+
+      // holdings 全体を上書き（最新データベース）
+      await setDoc(portfolioRef, { holdings: latestHoldings });
 
       // 総株数も更新
       const stockRef = doc(db, 'artifacts', appId, 'public', 'data', 'stocks', safeTarget);
@@ -1062,6 +1060,7 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
       const profit = sellValue - Math.floor(sharesToSell * holding.avgBuyPrice);
       showToast(`📉 ${targetName} 株売却 +${sellValue.toLocaleString()} G (${profit >= 0 ? '+' : ''}${profit.toLocaleString()} G)`, profit >= 0 ? 'success' : 'warning');
       setSellAmount('');
+      setSelectedPlayer(null);
     } catch(e) {
       console.error(e);
       showToast('売却エラー', 'error');
@@ -1080,7 +1079,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
     return ((curr - prev) / prev) * 100;
   };
 
-  // ミニチャート描画（インライン SVG）
   const MiniChart = ({ history, color }) => {
     if (!history || history.length < 2) return <span className="text-gray-600 text-xs">データなし</span>;
     const prices = history.slice(-20).map(h => h.price);
@@ -1107,7 +1105,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
     <div className="p-4 md:p-8 max-w-5xl mx-auto">
       <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white mb-6 transition"><ArrowLeft size={20} /> メニューに戻る</button>
 
-      {/* ヘッダー */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
         <div>
           <h2 className="text-3xl font-black text-white flex items-center gap-3">
@@ -1121,7 +1118,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
         </div>
       </div>
 
-      {/* ルール説明 */}
       <div className="bg-teal-500/5 border border-teal-500/20 rounded-2xl p-4 mb-6 text-xs text-gray-300 space-y-1">
         <p className="text-teal-400 font-black text-sm mb-2">📊 株式投資のルール</p>
         <p>・投資額の <span className="text-yellow-400 font-bold">10%</span> は即座に投資先プレイヤーへ配当として支払われます</p>
@@ -1131,7 +1127,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
         <p>・いつでも市場価格で売却して利益を確定できます</p>
       </div>
 
-      {/* タブ */}
       <div className="flex gap-2 mb-6">
         {[['MARKET', '📈 マーケット'], ['PORTFOLIO', '💼 ポートフォリオ']].map(([key, label]) => (
           <button key={key} onClick={() => setTab(key)}
@@ -1141,7 +1136,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
         ))}
       </div>
 
-      {/* マーケットタブ */}
       {tab === 'MARKET' && (
         <div className="space-y-4">
           {loading && <p className="text-gray-500 text-center py-12">読み込み中...</p>}
@@ -1163,7 +1157,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-4 flex-1">
-                      {/* アバター */}
                       <div className="w-12 h-12 rounded-full bg-gradient-to-br from-teal-600 to-cyan-700 flex items-center justify-center font-black text-white text-xl flex-shrink-0">
                         {p.name.charAt(0)}
                       </div>
@@ -1179,12 +1172,9 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
                     </div>
 
                     <div className="flex items-center gap-6">
-                      {/* ミニチャート */}
                       <div className="hidden md:block">
                         <MiniChart history={stock?.priceHistory} color={trend >= 0 ? '#34d399' : '#f87171'} />
                       </div>
-
-                      {/* 株価 */}
                       <div className="text-right">
                         <div className="text-white font-mono font-black text-xl">{currentPrice.toFixed(2)}</div>
                         <div className={`text-xs font-bold ${trend >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
@@ -1195,11 +1185,9 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
                   </div>
                 </div>
 
-                {/* 購入パネル（展開） */}
                 {isSelected && (
                   <div className="border-t border-gray-800 p-4 bg-gray-950/50 rounded-b-2xl">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {/* 購入 */}
                       <div>
                         <p className="text-teal-400 font-black text-sm mb-3">📈 株を購入する</p>
                         <div className="bg-gray-900 rounded-xl p-3 text-xs text-gray-400 space-y-1 mb-3">
@@ -1226,7 +1214,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
                         </div>
                       </div>
 
-                      {/* 売却 */}
                       <div>
                         <p className="text-red-400 font-black text-sm mb-3">📉 株を売却する</p>
                         {myHolding && myHolding.shares > 0.001 ? (
@@ -1277,7 +1264,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
         </div>
       )}
 
-      {/* ポートフォリオタブ */}
       {tab === 'PORTFOLIO' && (
         <div>
           {myHoldings.length === 0 ? (
@@ -1288,7 +1274,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
             </div>
           ) : (
             <>
-              {/* サマリーカード */}
               <div className="grid grid-cols-3 gap-4 mb-6">
                 <div className="bg-gray-900 border border-gray-800 rounded-2xl p-4 text-center">
                   <span className="text-xs text-gray-400 font-bold block mb-1">評価総額</span>
@@ -1306,7 +1291,6 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
                 </div>
               </div>
 
-              {/* 保有株一覧 */}
               <div className="space-y-3">
                 {myHoldings.map(([targetName, holding]) => {
                   const stock = stockPrices[targetName];
@@ -1353,12 +1337,10 @@ function InvestView({ balance, updateBalance, onBack, showToast, playerName, emi
                         </div>
                       </div>
 
-                      {/* ミニチャート */}
                       <div className="mb-3 bg-gray-950 rounded-xl p-3">
                         <MiniChart history={stock?.priceHistory} color={profit >= 0 ? '#34d399' : '#f87171'} />
                       </div>
 
-                      {/* 売却 */}
                       <div className="flex gap-2">
                         <input type="number" value={selectedPlayer === targetName ? sellAmount : ''}
                           onChange={e => { setSelectedPlayer(targetName); setSellAmount(e.target.value); }}

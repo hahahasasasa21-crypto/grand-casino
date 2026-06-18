@@ -501,7 +501,7 @@ export default function App() {
         {view === 'LOGIN' && (
           <div className="flex flex-col items-center justify-center min-h-screen p-4">
             <div className="mb-8 text-center">
-              <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-500 to-yellow-600 mb-2">GRAND CASINO</h1>
+              <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 via-amber-500 to-yellow-600 mb-2">YUTAPON CASINO</h1>
               <h2 className="text-2xl font-bold text-gray-500 tracking-widest">& TURF ONLINE</h2>
             </div>
             <div className="bg-gray-900/80 backdrop-blur-md p-8 rounded-3xl shadow-2xl border border-gray-800 w-full max-w-md">
@@ -542,7 +542,7 @@ export default function App() {
           <div className="p-4 md:p-8 max-w-7xl mx-auto">
             <div className="flex flex-col lg:flex-row justify-between items-center mb-8 border-b border-gray-800 pb-6 gap-4">
               <div>
-                <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-amber-500 mb-1">GRAND CASINO</h1>
+                <h1 className="text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-amber-500 mb-1">YUTAPON CASINO</h1>
                 <p className="text-gray-400 font-medium">おかえりなさい、<span className="text-white font-bold">{playerName}</span> 様</p>
               </div>
               <div className="flex flex-wrap items-center gap-3">

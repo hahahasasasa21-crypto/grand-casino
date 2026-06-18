@@ -475,7 +475,7 @@ export default function App() {
     info: 'text-blue-400', success: 'text-emerald-400', warning: 'text-orange-400',
     error: 'text-red-400', jackpot: 'text-yellow-300 font-black', transfer: 'text-purple-400',
     mining: 'text-amber-400', loss: 'text-red-400', janken: 'text-pink-400',
-    invest: 'text-teal-400', poker: 'text-green-300',
+    invest: 'text-teal-400', poker: 'text-green-300', blackjack: 'text-lime-300',
   };
 
   if (loadingMsg) return (
@@ -582,6 +582,14 @@ export default function App() {
                       <span className="bg-red-500/10 text-red-300 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 inline-block">Casino</span>
                       <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-red-300 transition">ROULETTE</h2>
                       <p className="text-gray-400 text-sm">数字1〜20・倍率は数字の値</p>
+                    </button>
+                    <button onClick={() => setView('BLACKJACK')} className="group relative overflow-hidden bg-gradient-to-br from-slate-950 to-gray-900 p-6 rounded-3xl shadow-2xl border border-lime-500/20 hover:border-lime-500/40 transition-all transform hover:-translate-y-1 text-left">
+                      <div className="absolute top-0 right-0 -mt-4 -mr-4 text-lime-500/10 group-hover:text-lime-400/20 transition-all duration-500">
+                        <span className="text-[110px] select-none leading-none">🂡</span>
+                      </div>
+                      <span className="bg-lime-500/10 text-lime-300 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest mb-3 inline-block">Casino</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-lime-300 transition">BLACKJACK</h2>
+                      <p className="text-gray-400 text-sm">ディーラー対戦・21を目指せ</p>
                     </button>
                     {HORSE_RACING_EVENT_ACTIVE ? (
                       <button onClick={() => setView('RACE')} className="group relative overflow-hidden bg-gradient-to-br from-emerald-950 to-green-950 p-6 rounded-3xl shadow-2xl border border-emerald-500/20 hover:border-emerald-500/40 transition-all transform hover:-translate-y-1 text-left">
@@ -736,6 +744,7 @@ export default function App() {
 
         {view === 'SLOT' && <SlotMachine balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
         {view === 'ROULETTE' && <RouletteView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
+        {view === 'BLACKJACK' && <BlackjackView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
         {view === 'LABOR' && <LaborView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} />}
         {view === 'MINING' && <MiningView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} />}
         {view === 'JANKEN' && <JankenView balance={balance} updateBalance={updateBalanceWithStock} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} db={db} appId={appId} />}
@@ -893,6 +902,354 @@ export default function App() {
       <footer className="py-6 border-t border-gray-900 text-center text-xs text-gray-600">
         © 2026 GRAND CASINO & TURF. All Rights Reserved.
       </footer>
+    </div>
+  );
+}
+
+// ==========================================
+// Component: BlackjackView（ブラックジャック・ディーラー対戦）
+// ==========================================
+function BlackjackView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
+  const SUITS_BJ = ['♠', '♥', '♦', '♣'];
+  const RANKS_BJ = ['A','2','3','4','5','6','7','8','9','10','J','Q','K'];
+  const BET_OPTIONS = [100, 500, 1000, 5000, 10000];
+
+  const [phase, setPhase] = useState('BETTING'); // BETTING -> PLAYER_TURN -> DEALER_TURN -> RESULT
+  const [bet, setBet] = useState(500);
+  const [deck, setDeck] = useState([]);
+  const [playerHand, setPlayerHand] = useState([]);
+  const [dealerHand, setDealerHand] = useState([]);
+  const [revealDealer, setRevealDealer] = useState(false);
+  const [resultInfo, setResultInfo] = useState(null); // { outcome, payout, net, label }
+  const [canDouble, setCanDouble] = useState(false);
+  const [doubled, setDoubled] = useState(false);
+  const [netStreak, setNetStreak] = useState(0);
+  const [handCount, setHandCount] = useState(0);
+  const [totalNet, setTotalNet] = useState(0);
+  const totalLossRef = useRef(0);
+
+  const buildDeck = () => {
+    const d = [];
+    for (const suit of SUITS_BJ) for (const rank of RANKS_BJ) d.push({ suit, rank });
+    for (let i = d.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [d[i], d[j]] = [d[j], d[i]];
+    }
+    return d;
+  };
+
+  const cardValue = (rank) => {
+    if (rank === 'A') return 11;
+    if (['J', 'Q', 'K'].includes(rank)) return 10;
+    return parseInt(rank, 10);
+  };
+
+  const handTotal = (hand) => {
+    let total = hand.reduce((sum, c) => sum + cardValue(c.rank), 0);
+    let aces = hand.filter(c => c.rank === 'A').length;
+    while (total > 21 && aces > 0) { total -= 10; aces--; }
+    return total;
+  };
+
+  const isBlackjack = (hand) => hand.length === 2 && handTotal(hand) === 21;
+  const isBust = (hand) => handTotal(hand) > 21;
+  const isSoft = (hand) => {
+    const raw = hand.reduce((sum, c) => sum + cardValue(c.rank), 0);
+    const aces = hand.filter(c => c.rank === 'A').length;
+    return raw > 21 ? false : (aces > 0 && handTotal(hand) !== raw - (aces > 0 ? 0 : 0)) || (aces > 0 && raw <= 21 && raw !== handTotal(hand));
+  };
+
+  const dealCard = (currentDeck) => {
+    const newDeck = [...currentDeck];
+    const card = newDeck.pop();
+    return { card, newDeck };
+  };
+
+  const startHand = async () => {
+    if (bet <= 0 || bet > balance) { showToast('ベット額が不正です。残高を確認してください。', 'error'); return; }
+    await updateBalance(-bet);
+    let d = deck.length < 15 ? buildDeck() : [...deck];
+
+    let pHand = [], dHand = [];
+    let res;
+    res = dealCard(d); pHand.push(res.card); d = res.newDeck;
+    res = dealCard(d); dHand.push(res.card); d = res.newDeck;
+    res = dealCard(d); pHand.push(res.card); d = res.newDeck;
+    res = dealCard(d); dHand.push(res.card); d = res.newDeck;
+
+    setDeck(d);
+    setPlayerHand(pHand);
+    setDealerHand(dHand);
+    setRevealDealer(false);
+    setResultInfo(null);
+    setDoubled(false);
+    setCanDouble(balance - bet >= bet);
+    setHandCount(c => c + 1);
+
+    const playerBJ = isBlackjack(pHand);
+    const dealerBJ = isBlackjack(dHand);
+    if (playerBJ || dealerBJ) {
+      setPhase('DEALER_TURN');
+      setTimeout(() => finishHand(pHand, dHand, d, bet, false), 700);
+    } else {
+      setPhase('PLAYER_TURN');
+    }
+  };
+
+  const handleHit = () => {
+    if (phase !== 'PLAYER_TURN') return;
+    const { card, newDeck } = dealCard(deck);
+    const newHand = [...playerHand, card];
+    setPlayerHand(newHand);
+    setDeck(newDeck);
+    setCanDouble(false);
+    if (isBust(newHand)) {
+      setPhase('DEALER_TURN');
+      setTimeout(() => finishHand(newHand, dealerHand, newDeck, doubled ? bet * 2 : bet, doubled), 500);
+    } else if (handTotal(newHand) === 21) {
+      handleStand(newHand, newDeck);
+    }
+  };
+
+  const handleStand = (handOverride, deckOverride) => {
+    if (phase !== 'PLAYER_TURN' && !handOverride) return;
+    const pHand = handOverride || playerHand;
+    const d = deckOverride || deck;
+    setPhase('DEALER_TURN');
+    setRevealDealer(true);
+    setTimeout(() => playDealerTurn(pHand, d), 600);
+  };
+
+  const handleDouble = () => {
+    if (!canDouble || phase !== 'PLAYER_TURN') return;
+    setDoubled(true);
+    setCanDouble(false);
+    updateBalance(-bet);
+    const { card, newDeck } = dealCard(deck);
+    const newHand = [...playerHand, card];
+    setPlayerHand(newHand);
+    setDeck(newDeck);
+    setPhase('DEALER_TURN');
+    setRevealDealer(true);
+    if (isBust(newHand)) {
+      setTimeout(() => finishHand(newHand, dealerHand, newDeck, bet * 2, true), 700);
+    } else {
+      setTimeout(() => playDealerTurn(newHand, newDeck, true), 700);
+    }
+  };
+
+  const playDealerTurn = (pHand, d, wasDoubled = false) => {
+    let dHand = [...dealerHand];
+    let currentDeck = [...d];
+    const step = () => {
+      if (isBust(pHand)) { finishHand(pHand, dHand, currentDeck, wasDoubled ? bet * 2 : bet, wasDoubled); return; }
+      if (handTotal(dHand) < 17) {
+        const { card, newDeck } = dealCard(currentDeck);
+        dHand = [...dHand, card];
+        currentDeck = newDeck;
+        setDealerHand([...dHand]);
+        setDeck([...currentDeck]);
+        setTimeout(step, 600);
+      } else {
+        finishHand(pHand, dHand, currentDeck, wasDoubled ? bet * 2 : bet, wasDoubled);
+      }
+    };
+    setTimeout(step, 400);
+  };
+
+  const finishHand = (pHand, dHand, finalDeck, totalBetUsed, wasDoubled) => {
+    setRevealDealer(true);
+    const pTotal = handTotal(pHand);
+    const dTotal = handTotal(dHand);
+    const pBJ = isBlackjack(pHand);
+    const dBJ = isBlackjack(dHand);
+    const pBust = isBust(pHand);
+    const dBust = isBust(dHand);
+
+    let outcome, payout, label;
+    if (pBust) {
+      outcome = 'LOSE'; payout = 0; label = 'バースト...';
+    } else if (pBJ && dBJ) {
+      outcome = 'PUSH'; payout = totalBetUsed; label = '両者ブラックジャック・プッシュ';
+    } else if (pBJ) {
+      outcome = 'BLACKJACK'; payout = Math.floor(totalBetUsed * 2.5); label = 'ブラックジャック！';
+    } else if (dBJ) {
+      outcome = 'LOSE'; payout = 0; label = 'ディーラーブラックジャック';
+    } else if (dBust) {
+      outcome = 'WIN'; payout = totalBetUsed * 2; label = 'ディーラーバースト！';
+    } else if (pTotal > dTotal) {
+      outcome = 'WIN'; payout = totalBetUsed * 2; label = '勝利！';
+    } else if (pTotal < dTotal) {
+      outcome = 'LOSE'; payout = 0; label = '敗北...';
+    } else {
+      outcome = 'PUSH'; payout = totalBetUsed; label = 'プッシュ（引き分け）';
+    }
+
+    const net = payout - totalBetUsed;
+    if (payout > 0) updateBalance(payout);
+    setTotalNet(t => t + net);
+    setNetStreak(s => net > 0 ? Math.max(1, s + 1) : net < 0 ? Math.min(-1, s - 1) : 0);
+
+    if (net > 0) {
+      totalLossRef.current = 0;
+      if (net >= 50000) emitNews(`🂡 ${playerName} がブラックジャックで大勝ち！ +${net.toLocaleString()} G！`, 'blackjack');
+    } else if (net < 0) {
+      totalLossRef.current += Math.abs(net);
+      if (totalLossRef.current >= 100000) {
+        emitNews(`💸 ${playerName} がブラックジャックで ${totalLossRef.current.toLocaleString()} G の大負けを記録...`, 'loss');
+        totalLossRef.current = 0;
+      }
+    }
+
+    setResultInfo({ outcome, payout, net, label, pTotal, dTotal });
+    setPhase('RESULT');
+  };
+
+  const resetToBetting = () => {
+    setPhase('BETTING');
+    setPlayerHand([]);
+    setDealerHand([]);
+    setRevealDealer(false);
+    setResultInfo(null);
+    setDoubled(false);
+  };
+
+  const CardFace = ({ card, hidden = false }) => {
+    if (hidden) return (
+      <div className="w-16 h-24 md:w-20 md:h-28 bg-gradient-to-br from-blue-800 to-blue-900 rounded-xl border-2 border-blue-600 flex items-center justify-center shadow-xl">
+        <span className="text-blue-400 text-2xl">🂠</span>
+      </div>
+    );
+    const isRed = card.suit === '♥' || card.suit === '♦';
+    return (
+      <div className="w-16 h-24 md:w-20 md:h-28 bg-white rounded-xl border-2 border-gray-200 flex flex-col items-center justify-center shadow-xl">
+        <span className={`font-black leading-none text-lg md:text-xl ${isRed ? 'text-red-500' : 'text-gray-900'}`}>{card.rank}</span>
+        <span className={`leading-none text-2xl md:text-3xl ${isRed ? 'text-red-500' : 'text-gray-900'}`}>{card.suit}</span>
+      </div>
+    );
+  };
+
+  const dealerVisibleTotal = revealDealer ? handTotal(dealerHand) : (dealerHand.length > 0 ? cardValue(dealerHand[0].rank) : 0);
+  const playerTotalNow = handTotal(playerHand);
+
+  const resultColor = resultInfo
+    ? resultInfo.outcome === 'BLACKJACK' ? 'border-yellow-500 bg-yellow-500/10'
+    : resultInfo.outcome === 'WIN' ? 'border-emerald-500 bg-emerald-500/10'
+    : resultInfo.outcome === 'PUSH' ? 'border-gray-600 bg-gray-800/40'
+    : 'border-red-500 bg-red-500/10'
+    : '';
+  const resultTextColor = resultInfo
+    ? resultInfo.outcome === 'BLACKJACK' ? 'text-yellow-400'
+    : resultInfo.outcome === 'WIN' ? 'text-emerald-400'
+    : resultInfo.outcome === 'PUSH' ? 'text-gray-300'
+    : 'text-red-400'
+    : '';
+
+  return (
+    <div className="p-4 md:p-8 max-w-3xl mx-auto">
+      <div className="w-full flex justify-between items-center mb-6">
+        <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
+        <div className="flex items-center gap-4">
+          <div className="text-center"><div className="text-xs text-gray-500 font-bold">HANDS</div><div className="font-mono text-lime-400 font-bold">{handCount}</div></div>
+          <div className="text-center"><div className="text-xs text-gray-500 font-bold">NET</div><div className={`font-mono font-bold ${totalNet >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{totalNet >= 0 ? '+' : ''}{totalNet.toLocaleString()}</div></div>
+          <div className="bg-gray-900/95 px-5 py-2 rounded-full border border-gray-800 font-mono text-xl text-yellow-500 font-bold">{balance.toLocaleString()} G</div>
+        </div>
+      </div>
+
+      <div className="bg-gradient-to-b from-green-950/60 to-gray-950 rounded-[2rem] border-4 border-lime-900/40 shadow-2xl p-6 md:p-8">
+        <div className="text-center mb-3">
+          <span className="text-2xl">🂡</span>
+          <h2 className="text-2xl font-black text-lime-300 tracking-widest">BLACKJACK</h2>
+        </div>
+
+        {/* ディーラー */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between mb-2 px-1">
+            <span className="text-gray-400 font-bold text-sm">DEALER</span>
+            {dealerHand.length > 0 && (
+              <span className="text-gray-300 font-mono font-bold text-sm">
+                {revealDealer ? dealerVisibleTotal : `${dealerVisibleTotal} + ?`}
+              </span>
+            )}
+          </div>
+          <div className="flex gap-2 justify-center min-h-[7rem] items-center flex-wrap">
+            {dealerHand.length === 0 ? (
+              <p className="text-gray-600 text-sm">ベットしてゲームを開始してください</p>
+            ) : dealerHand.map((c, i) => (
+              <CardFace key={i} card={c} hidden={i === 1 && !revealDealer} />
+            ))}
+          </div>
+        </div>
+
+        {/* プレイヤー */}
+        <div>
+          <div className="flex items-center justify-between mb-2 px-1">
+            <span className="text-blue-300 font-bold text-sm">YOU ({playerName})</span>
+            {playerHand.length > 0 && (
+              <span className={`font-mono font-bold text-sm ${playerTotalNow > 21 ? 'text-red-400' : 'text-white'}`}>{playerTotalNow}</span>
+            )}
+          </div>
+          <div className="flex gap-2 justify-center min-h-[7rem] items-center flex-wrap">
+            {playerHand.map((c, i) => <CardFace key={i} card={c} />)}
+          </div>
+        </div>
+      </div>
+
+      {/* ベッティング */}
+      {phase === 'BETTING' && (
+        <div className="mt-6 bg-gray-900 rounded-2xl border border-gray-800 p-5">
+          <label className="block text-sm text-gray-400 font-bold mb-3">ベット額を選択</label>
+          <div className="grid grid-cols-5 gap-2 mb-4">
+            {BET_OPTIONS.map(v => (
+              <button key={v} onClick={() => setBet(v)} disabled={v > balance}
+                className={`py-2.5 rounded-xl font-black text-sm transition disabled:opacity-30 ${bet === v ? 'bg-lime-500 text-black' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}>
+                {v >= 1000 ? `${v / 1000}K` : v}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3 mb-4">
+            <input type="number" value={bet} onChange={e => setBet(Number(e.target.value))} min={10} step={10}
+              className="flex-1 bg-gray-950 text-white font-mono text-lg p-3 rounded-xl border border-gray-800 focus:outline-none focus:border-lime-500" />
+            <span className="text-gray-500 text-sm">所持金: <span className="text-yellow-400 font-bold">{balance.toLocaleString()} G</span></span>
+          </div>
+          <button onClick={startHand} disabled={bet <= 0 || bet > balance}
+            className="w-full bg-gradient-to-r from-lime-500 to-green-600 text-black font-black py-4 rounded-xl text-lg shadow-lg disabled:opacity-40 transition transform hover:scale-[1.02] active:scale-95">
+            🂡 カードを配る（{bet.toLocaleString()} G）
+          </button>
+        </div>
+      )}
+
+      {/* アクションパネル */}
+      {phase === 'PLAYER_TURN' && (
+        <div className="mt-6 bg-gray-900 rounded-2xl border border-lime-500/30 p-5">
+          <p className="text-center text-lime-400 font-black text-sm mb-4">どうしますか？</p>
+          <div className="grid grid-cols-3 gap-3">
+            <button onClick={handleHit} className="bg-blue-600 hover:bg-blue-500 text-white font-black py-4 rounded-xl transition active:scale-95">ヒット</button>
+            <button onClick={() => handleStand()} className="bg-gray-700 hover:bg-gray-600 text-white font-black py-4 rounded-xl transition active:scale-95">スタンド</button>
+            <button onClick={handleDouble} disabled={!canDouble} className="bg-orange-600 hover:bg-orange-500 disabled:opacity-30 text-white font-black py-4 rounded-xl transition active:scale-95">ダブル</button>
+          </div>
+        </div>
+      )}
+
+      {phase === 'DEALER_TURN' && (
+        <div className="mt-6 bg-gray-900 rounded-2xl border border-gray-800 p-5 text-center">
+          <p className="text-gray-400 font-bold flex items-center justify-center gap-2"><RefreshCw size={18} className="animate-spin text-lime-400" /> ディーラーがプレイ中...</p>
+        </div>
+      )}
+
+      {/* 結果 */}
+      {phase === 'RESULT' && resultInfo && (
+        <div className={`mt-6 rounded-2xl border-2 p-6 text-center ${resultColor}`}>
+          <h3 className={`text-3xl font-black mb-2 ${resultTextColor}`}>{resultInfo.label}</h3>
+          <p className="text-gray-400 text-sm mb-3">あなた: {resultInfo.pTotal} ／ ディーラー: {resultInfo.dTotal}</p>
+          <div className={`text-4xl font-black mb-4 ${resultInfo.net > 0 ? 'text-emerald-400' : resultInfo.net < 0 ? 'text-red-400' : 'text-gray-300'}`}>
+            {resultInfo.net > 0 ? '+' : ''}{resultInfo.net.toLocaleString()} G
+          </div>
+          <button onClick={resetToBetting} className="w-full bg-lime-600 hover:bg-lime-500 text-black font-black py-4 rounded-xl text-lg transition active:scale-95">
+            もう一度ベットする
+          </button>
+        </div>
+      )}
     </div>
   );
 }

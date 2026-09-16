@@ -53,7 +53,8 @@ export class ErrorBoundary extends React.Component {
 /* ==========================================================
    共通UIパーツ（カジノ調）
    ========================================================== */
-export function FeltBackdrop() {
+export function FeltBackdrop({ vip = false }) {
+  if (vip) return <RoyalBackdrop />;
   return (
     <div className="fixed inset-0 -z-10 pointer-events-none">
       <div className="absolute inset-0 bg-[#07100c]" />
@@ -66,6 +67,75 @@ export function FeltBackdrop() {
       <div className="absolute -top-24 left-1/5 w-[28rem] h-[28rem] rounded-full blur-3xl bg-amber-500/10" />
       <div className="absolute bottom-0 right-1/5 w-[28rem] h-[28rem] rounded-full blur-3xl bg-emerald-500/10" />
     </div>
+  );
+}
+
+/** VIP専用のゴージャスな内装 */
+export function RoyalBackdrop() {
+  return (
+    <div className="fixed inset-0 -z-10 pointer-events-none overflow-hidden">
+      <div className="absolute inset-0" style={{ background: 'linear-gradient(180deg,#1a0f04 0%,#160c06 45%,#0b0602 100%)' }} />
+      {/* 天井のシャンデリア光 */}
+      <div className="absolute inset-0" style={{
+        background: 'radial-gradient(ellipse 120% 60% at 50% -10%, rgba(255,196,84,0.30) 0%, rgba(255,170,40,0.08) 38%, rgba(0,0,0,0) 66%)'
+      }} />
+      {/* 金のダマスク柄 */}
+      <div className="absolute inset-0 opacity-[0.10]" style={{
+        backgroundImage:
+          'radial-gradient(circle at 24px 24px, rgba(255,205,110,0.9) 0 2.5px, rgba(0,0,0,0) 3px),' +
+          'radial-gradient(circle at 72px 72px, rgba(255,205,110,0.7) 0 2px, rgba(0,0,0,0) 2.5px),' +
+          'repeating-linear-gradient(45deg, rgba(255,205,110,0.35) 0 1px, rgba(0,0,0,0) 1px 26px),' +
+          'repeating-linear-gradient(-45deg, rgba(255,205,110,0.35) 0 1px, rgba(0,0,0,0) 1px 26px)',
+        backgroundSize: '96px 96px, 96px 96px, 96px 96px, 96px 96px',
+      }} />
+      {/* ベルベットのカーテン */}
+      <div className="absolute inset-y-0 left-0 w-28 md:w-44" style={{
+        background: 'linear-gradient(90deg, rgba(90,10,18,0.95) 0%, rgba(120,16,26,0.55) 55%, rgba(0,0,0,0) 100%)',
+        maskImage: 'linear-gradient(90deg,#000 60%,transparent)',
+      }}>
+        <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'repeating-linear-gradient(90deg, rgba(0,0,0,0.5) 0 6px, rgba(255,255,255,0.06) 6px 14px)' }} />
+      </div>
+      <div className="absolute inset-y-0 right-0 w-28 md:w-44" style={{
+        background: 'linear-gradient(270deg, rgba(90,10,18,0.95) 0%, rgba(120,16,26,0.55) 55%, rgba(0,0,0,0) 100%)',
+      }}>
+        <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'repeating-linear-gradient(90deg, rgba(0,0,0,0.5) 0 6px, rgba(255,255,255,0.06) 6px 14px)' }} />
+      </div>
+      {/* 光の粒 */}
+      {[...Array(14)].map((_, i) => (
+        <span key={i} className="absolute rounded-full" style={{
+          left: `${(i * 37 + 8) % 96}%`, top: `${(i * 53 + 12) % 92}%`,
+          width: 3 + (i % 3), height: 3 + (i % 3),
+          background: 'radial-gradient(circle,#ffe9a8,rgba(255,200,80,0))',
+          animation: `vipTwinkle ${2.6 + (i % 5) * 0.5}s ${(i % 7) * 0.4}s ease-in-out infinite`,
+        }} />
+      ))}
+      <div className="absolute -top-20 left-1/2 -translate-x-1/2 w-[34rem] h-[34rem] rounded-full blur-3xl" style={{ background: 'rgba(255,190,70,0.10)' }} />
+      <style>{`@keyframes vipTwinkle { 0%,100% { opacity: 0.15; transform: scale(0.8);} 50% { opacity: 1; transform: scale(1.5);} }`}</style>
+    </div>
+  );
+}
+
+/** 名前の横につく金色のVIPバッジ */
+export function VipBadge({ size = 'sm', className = '' }) {
+  const s = size === 'xs' ? 'text-[8px] px-1 py-0' : size === 'lg' ? 'text-sm px-2.5 py-0.5' : 'text-[10px] px-1.5 py-0.5';
+  return (
+    <span className={`inline-flex items-center rounded-md font-black tracking-widest align-middle ${s} ${className}`}
+      style={{
+        background: 'linear-gradient(180deg,#fff3c4 0%,#f5c542 38%,#b8860b 100%)',
+        color: '#3b2506',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.7)',
+        textShadow: '0 1px 0 rgba(255,255,255,0.35)',
+      }}>VIP</span>
+  );
+}
+
+/** 名前＋VIPバッジ */
+export function PlayerName({ name, vip, size = 'sm', className = '' }) {
+  return (
+    <span className={`inline-flex items-center gap-1 ${className}`}>
+      <span className={vip ? 'text-amber-200' : ''}>{name}</span>
+      {vip && <VipBadge size={size === 'lg' ? 'sm' : 'xs'} />}
+    </span>
   );
 }
 

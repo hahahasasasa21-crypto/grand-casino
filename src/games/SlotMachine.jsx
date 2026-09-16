@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { ArrowLeft, RefreshCw, Volume2, VolumeX } from 'lucide-react';
-import { Panel, GoldButton, playSfx } from '../shared/ui';
+import { Panel, GoldButton, VipBadge, playSfx } from '../shared/ui';
+import { VIP_SLOT_BETS } from '../shared/vip';
 import {
   REEL_STRIPS, STRIP_LEN, SLOT_SYMBOLS, SLOT_LINES, LINE_PAYS, TWO_PAYS,
   MIX_PREMIUM_PAY, SCATTER_PAYS, gridFromStops, evaluateGrid, SYM,
@@ -125,7 +126,7 @@ const Reel = React.forwardRef(function Reel({ col, blur }, ref) {
 });
 
 /* ---------- 本体 ---------- */
-export default function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
+export default function SlotMachine({ balance, updateBalance, onBack, showToast, playerName, emitNews, vip }) {
   const [lineBet, setLineBet] = useState(100);
   const [status, setStatus] = useState('IDLE');       // IDLE | SPINNING | RESULT
   const [spinning, setSpinning] = useState([false, false, false]);
@@ -141,6 +142,9 @@ export default function SlotMachine({ balance, updateBalance, onBack, showToast,
   const [winMeter, setWinMeter] = useState(0);
 
   const totalBet = lineBet * 5;
+  useEffect(() => {
+    if (!vip && VIP_SLOT_BETS.includes(lineBet)) setLineBet(5000);
+  }, [vip, lineBet]);
 
   const reelRefs = [useRef(null), useRef(null), useRef(null)];
   const rafRef = useRef(null);
@@ -515,6 +519,16 @@ export default function SlotMachine({ balance, updateBalance, onBack, showToast,
                   {v.toLocaleString()}
                 </button>
               ))}
+              {VIP_SLOT_BETS.map(v => (
+                <button key={v} onClick={() => { if (!vip) { showToast('高額ベットはVIP会員限定です。', 'warning'); return; } if (isIdle) setLineBet(v); }}
+                  disabled={!isIdle}
+                  title={vip ? '' : 'VIP会員限定'}
+                  className={`relative px-3 py-1.5 rounded-lg text-xs font-black border transition disabled:opacity-50 ${!vip ? 'bg-black/40 text-gray-600 border-amber-400/20 cursor-not-allowed'
+                    : lineBet === v ? 'bg-amber-400 text-black border-amber-200' : 'bg-black/50 text-amber-200 border-amber-400/40 hover:bg-amber-400/10'}`}>
+                  {v.toLocaleString()}{!vip && <span className="ml-1">🔒</span>}
+                </button>
+              ))}
+              {vip && <VipBadge size="xs" />}
               <span className="text-[11px] text-gray-400 font-bold ml-1">× 5ライン = <span className="text-amber-300">{totalBet.toLocaleString()} G</span></span>
             </div>
             <div className="flex gap-2 items-center">

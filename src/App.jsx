@@ -1,9 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, deleteDoc, where } from 'firebase/firestore';
-import { Coins, Trophy, ArrowLeft, AlertCircle, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, TrendingUp, Lock, Newspaper, Pickaxe, BookOpen, History } from 'lucide-react';
+import { Coins, Trophy, ArrowLeft, AlertCircle, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, TrendingUp, Lock, Newspaper, Pickaxe, BookOpen, History, ShoppingBag, Crown } from 'lucide-react';
 import { db, auth, appId, postNews } from './shared/firebase';
-import { FeltBackdrop, Panel, GoldButton, SectionTitle, ErrorBoundary, TAU } from './shared/ui';
+import { FeltBackdrop, Panel, GoldButton, SectionTitle, ErrorBoundary, VipBadge, TAU } from './shared/ui';
+import { VIP_PRICE, VIP_NEWS_COOLDOWN, VIP_NEWS_MAX_LEN, newsCooldownLeft } from './shared/vip';
+import Shop from './views/Shop';
+import Blackjack from './games/Blackjack';
 import SlotMachine from './games/SlotMachine';
 import RedBlackView from './games/RedBlack';
 import PokerView from './games/Poker';
@@ -79,6 +82,11 @@ export default function App() {
   const [bankBalance, setBankBalance] = useState(0);
   const [loanBalance, setLoanBalance] = useState(0);
   const [creditScore, setCreditScore] = useState(100);
+  const [vip, setVip] = useState(false);
+  const [vipSince, setVipSince] = useState(0);
+  const [lastVipNewsAt, setLastVipNewsAt] = useState(0);
+  const [newsDraft, setNewsDraft] = useState('');
+  const [newsTick, setNewsTick] = useState(0);
   const [view, setView] = useState('LOGIN');
   const [loadingMsg, setLoadingMsg] = useState('通信を確立中...');
   const [toastMsg, setToastMsg] = useState('');
@@ -101,6 +109,16 @@ export default function App() {
     toastTimerRef.current = setTimeout(() => setToastMsg(''), 4000);
   }, []);
   useEffect(() => () => clearTimeout(toastTimerRef.current), []);
+  useEffect(() => {
+    const iv = setInterval(() => setNewsTick(t => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, []);
+  // 背景色（下までスクロールしても白くならないように）
+  useEffect(() => {
+    const c = vip ? '#140b05' : '#07100c';
+    document.documentElement.style.backgroundColor = c;
+    document.body.style.backgroundColor = c;
+  }, [vip]);
 
   useEffect(() => {
     let alive = true;
@@ -126,6 +144,9 @@ export default function App() {
         setBankBalance(d.bankBalance || 0);
         setLoanBalance(d.loanBalance || 0);
         setCreditScore(d.creditScore ?? 100);
+        setVip(d.vip === true);
+        setVipSince(d.vipSince || 0);
+        setLastVipNewsAt(d.lastVipNewsAt || 0);
         setTransferHistory(d.transferHistory || []);
         calcOfflineInterest(d, docRef);
         calcLoanInterest(d, docRef);
@@ -135,6 +156,7 @@ export default function App() {
           balance: 10000, bankBalance: 0, loanBalance: 0,
           creditScore: 100, lastInterestTime: now, lastLoanTime: now,
           createdAt: now, name: playerName, password: passwordRef.current,
+          vip: false, vipSince: 0, lastVipNewsAt: 0,
           transferHistory: []
         });
       }
@@ -193,17 +215,21 @@ export default function App() {
         const data = d.data();
         let name = data.name;
         if (!name) { try { name = decodeURIComponent(d.id); } catch (e) { name = d.id; } }
+        const total = (data.balance || 0) + (data.bankBalance || 0) - (data.loanBalance || 0);
         players.push({
           name,
           balance: data.balance || 0,
           bankBalance: data.bankBalance || 0,
           loanBalance: data.loanBalance || 0,
           creditScore: data.creditScore ?? 100,
-          total: (data.balance || 0) + (data.bankBalance || 0) - (data.loanBalance || 0)
+          vip: data.vip === true,
+          createdAt: data.createdAt || 0,
+          profit: total - 10000,
+          total,
         });
       });
       players.sort((a, b) => b.total - a.total);
-      setRankingData(players.slice(0, 10));
+      setRankingData(players.slice(0, 20));
     });
     return () => unsub();
   }, [user, view]);
@@ -282,6 +308,39 @@ export default function App() {
       await updateBalance(1000);
       showToast('【救済】1,000G を受け取りました！', 'success');
     } else showToast('まだ資産があります！', 'error');
+  };
+
+  /* ---------- VIP ---------- */
+  const buyVip = useCallback(async () => {
+    if (vip) return;
+    if (balance < VIP_PRICE) { showToast('所持金が足りません。', 'error'); return; }
+    try {
+      await updateDoc(playerRef(playerName), {
+        balance: increment(-VIP_PRICE),
+        vip: true,
+        vipSince: Date.now(),
+      });
+      showToast('👑 VIP会員になりました！ ようこそVIPルームへ。', 'success');
+      postNews(db, appId, `👑 ${playerName} が VIP会員になりました！`, 'jackpot');
+      setView('MENU');
+    } catch (e) {
+      showToast('購入に失敗しました。', 'error');
+    }
+  }, [vip, balance, playerName, playerRef, showToast]);
+
+  const vipNewsLeft = useMemo(() => newsCooldownLeft(lastVipNewsAt), [lastVipNewsAt, newsTick]);
+  const postVipNews = async () => {
+    const msg = newsDraft.trim();
+    if (!vip) return;
+    if (!msg) { showToast('メッセージを入力してください。', 'error'); return; }
+    if (msg.length > VIP_NEWS_MAX_LEN) { showToast(`${VIP_NEWS_MAX_LEN}文字までです。`, 'error'); return; }
+    if (newsCooldownLeft(lastVipNewsAt) > 0) { showToast('次の投稿までもう少しお待ちください。', 'warning'); return; }
+    try {
+      await postNews(db, appId, `📣 ${playerName}：${msg}`, 'vip');
+      await updateDoc(playerRef(playerName), { lastVipNewsAt: Date.now() });
+      setNewsDraft('');
+      showToast('📣 ニュースに投稿しました！', 'success');
+    } catch (e) { showToast('投稿に失敗しました。', 'error'); }
   };
 
   const handleBankAction = async (action) => {
@@ -387,6 +446,7 @@ export default function App() {
     info: 'text-sky-300', success: 'text-emerald-300', warning: 'text-orange-300', error: 'text-red-300',
     jackpot: 'text-amber-300 font-black', transfer: 'text-purple-300', mining: 'text-amber-400',
     loss: 'text-red-300', janken: 'text-pink-300', invest: 'text-cyan-300', race: 'text-emerald-300', poker: 'text-indigo-300',
+    vip: 'text-amber-200 font-bold',
   };
 
   const gameCards = [
@@ -395,12 +455,14 @@ export default function App() {
     { id: 'REDBLACK', tag: 'Casino', title: 'RED & BLACK', desc: '3D欧州式ホイール・本格ベットテーブル', emoji: '🔴', ring: 'from-rose-900/70 to-neutral-950' },
     { id: 'POKER', tag: 'Card Room', title: "TEXAS HOLD'EM", desc: '6人テーブル・SB/BB・サイドポット対応', emoji: '🃏', ring: 'from-emerald-900/70 to-green-950' },
     { id: 'RACE', tag: 'Racing', title: 'VIRTUAL TURF', desc: '能力非公開・50種スキル・公開レース対応', emoji: '🏇', ring: 'from-lime-900/70 to-emerald-950' },
+    { id: 'BLACKJACK', tag: 'VIP Room', title: 'BLACKJACK', desc: '6デッキ・3:2配当・スプリット/ダブル対応', emoji: '🃏', ring: 'from-amber-900/70 to-yellow-950', vipOnly: true },
     { id: 'JANKEN', tag: 'Online', title: 'オンラインじゃんけん', desc: 'ルーム制2人対戦・チャット付き', emoji: '✊', ring: 'from-pink-900/70 to-rose-950' },
+    { id: 'LIFE', tag: 'Online', title: 'オンライン人生ゲーム', desc: 'みんなで回す人生の盤上ゲーム', emoji: '🎲', ring: 'from-slate-800/70 to-slate-950', locked: true, lockNote: '準備中' },
   ];
 
   if (loadingMsg) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#07100c] text-white">
-      <FeltBackdrop />
+      <FeltBackdrop vip={vip} />
       <RefreshCw className="animate-spin text-amber-400 mb-4" size={48} />
       <p className="font-bold text-lg tracking-widest">{loadingMsg}</p>
     </div>
@@ -408,7 +470,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen text-white font-sans relative flex flex-col justify-between">
-      <FeltBackdrop />
+      <FeltBackdrop vip={vip} />
 
       {toastMsg && (
         <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[60] px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 font-bold max-w-[90vw] text-center ${toastColors[toastType]}`}>
@@ -422,7 +484,7 @@ export default function App() {
           <div className="flex flex-col items-center justify-center min-h-screen p-4">
             <div className="mb-8 text-center">
               <div className="text-5xl mb-3">♠️ ♥️ ♦️ ♣️</div>
-              <h1 className="text-5xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 mb-1 tracking-tight">GRAND CASINO</h1>
+              <h1 className="text-5xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-b from-amber-200 via-amber-400 to-amber-600 mb-1 tracking-tight">YUTAPON CASINO</h1>
               <h2 className="text-lg md:text-2xl font-bold text-amber-100/40 tracking-[0.4em]">&amp; TURF ONLINE</h2>
             </div>
             <Panel gold className="p-8 w-full max-w-md">
@@ -464,8 +526,11 @@ export default function App() {
           <div className="p-4 md:p-8 max-w-7xl mx-auto">
             <div className="flex flex-col lg:flex-row justify-between items-center mb-8 border-b border-amber-500/20 pb-6 gap-4">
               <div>
-                <h1 className="text-3xl md:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-b from-amber-200 to-amber-500 mb-1">GRAND CASINO</h1>
-                <p className="text-gray-400 font-medium">おかえりなさい、<span className="text-white font-bold">{playerName}</span> 様</p>
+                <h1 className="text-3xl md:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-b from-amber-200 to-amber-500 mb-1">YUTAPON CASINO</h1>
+                <p className="text-gray-400 font-medium flex items-center gap-1.5">
+                  おかえりなさい、<span className={`font-bold ${vip ? 'text-amber-200' : 'text-white'}`}>{playerName}</span>
+                  {vip && <VipBadge size="sm" />} 様
+                </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3">
                 <div className="bg-black/50 border border-amber-500/20 px-4 py-3 rounded-2xl flex items-center gap-3">
@@ -490,15 +555,32 @@ export default function App() {
                 <div>
                   <p className="text-[11px] text-amber-200/50 uppercase tracking-[0.3em] font-bold mb-3">Game Floor</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {gameCards.filter(g => g.id !== 'RACE' || HORSE_RACING_EVENT_ACTIVE).map(g => (
-                      <button key={g.id} onClick={() => setView(g.id)}
-                        className={`group relative overflow-hidden bg-gradient-to-br ${g.ring} p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-amber-400/50 transition-all transform hover:-translate-y-1 text-left`}>
-                        <div className="absolute -top-6 -right-4 text-[110px] leading-none opacity-10 group-hover:opacity-20 transition select-none">{g.emoji}</div>
-                        <span className="bg-black/40 text-amber-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-amber-300/20">{g.tag}</span>
-                        <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-amber-200 transition">{g.title}</h2>
-                        <p className="text-gray-400 text-sm">{g.desc}</p>
-                      </button>
-                    ))}
+                    {gameCards.filter(g => g.id !== 'RACE' || HORSE_RACING_EVENT_ACTIVE).map(g => {
+                      const needsVip = g.vipOnly && !vip;
+                      const locked = g.locked;
+                      return (
+                        <button key={g.id}
+                          onClick={() => {
+                            if (locked) { showToast('オンライン人生ゲームは準備中です。もう少しお待ちください！', 'info'); return; }
+                            if (needsVip) { showToast('ブラックジャックはVIP会員限定です。ショップでVIP券をどうぞ。', 'warning'); setView('SHOP'); return; }
+                            setView(g.id);
+                          }}
+                          className={`group relative overflow-hidden bg-gradient-to-br ${g.ring} p-6 rounded-3xl shadow-2xl border transition-all transform text-left
+                            ${locked ? 'border-white/5 opacity-55 cursor-not-allowed'
+                              : needsVip ? 'border-amber-400/25 hover:border-amber-300/60 hover:-translate-y-1'
+                                : 'border-white/10 hover:border-amber-400/50 hover:-translate-y-1'}`}>
+                          <div className="absolute -top-6 -right-4 text-[110px] leading-none opacity-10 group-hover:opacity-20 transition select-none">{g.emoji}</div>
+                          <div className="flex items-center gap-2 mb-3">
+                            <span className="bg-black/40 text-amber-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] inline-block border border-amber-300/20">{g.tag}</span>
+                            {g.vipOnly && <VipBadge size="xs" />}
+                            {locked && <span className="flex items-center gap-1 bg-black/50 text-gray-400 text-[10px] font-black px-2 py-1 rounded-full border border-white/10"><Lock size={10} />{g.lockNote}</span>}
+                          </div>
+                          <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-amber-200 transition">{g.title}</h2>
+                          <p className="text-gray-400 text-sm">{g.desc}</p>
+                          {needsVip && <p className="text-[11px] text-amber-300/80 font-bold mt-1">VIP会員になると遊べます</p>}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -522,7 +604,8 @@ export default function App() {
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {[
-                    { id: 'BANK', label: 'グランドバンク', sub: '預金・借入・信用度', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
+                    { id: 'SHOP', label: 'ショップ', sub: vip ? 'VIP会員です' : 'VIP券を購入', icon: <ShoppingBag size={20} />, tone: 'text-amber-300' },
+                    { id: 'BANK', label: 'ユタポンバンク', sub: '預金・借入・信用度', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
                     { id: 'TRANSFER', label: 'オンライン送金', sub: '他プレイヤーへ送金', icon: <Send size={20} />, tone: 'text-sky-300' },
                     { id: 'INVEST', label: '人物株投資', sub: '他プレイヤーに投資', icon: <TrendingUp size={20} />, tone: 'text-cyan-300' },
                     { id: 'RANKING', label: '長者番付', sub: 'トップ10', icon: <Trophy size={20} />, tone: 'text-amber-300' },
@@ -573,6 +656,32 @@ export default function App() {
                       </div>
                     ))}
                   </div>
+                  {vip ? (
+                    <div className="border-t border-amber-400/20 p-2.5 bg-amber-400/5">
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <VipBadge size="xs" />
+                        <span className="text-[10px] font-black text-amber-200/80">ニュースに書き込む</span>
+                        {vipNewsLeft > 0 && (
+                          <span className="ml-auto text-[10px] font-mono text-gray-500">
+                            あと {Math.floor(vipNewsLeft / 60000)}:{String(Math.floor((vipNewsLeft % 60000) / 1000)).padStart(2, '0')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-1.5">
+                        <input value={newsDraft} onChange={e => setNewsDraft(e.target.value.slice(0, VIP_NEWS_MAX_LEN))}
+                          onKeyDown={e => e.key === 'Enter' && postVipNews()}
+                          disabled={vipNewsLeft > 0}
+                          placeholder={vipNewsLeft > 0 ? '5分に1回まで投稿できます' : '全員のニュース欄に流れます'}
+                          className="flex-1 min-w-0 bg-black/60 text-white text-xs p-2 rounded-lg border border-white/10 focus:border-amber-400 outline-none disabled:opacity-50" />
+                        <button onClick={postVipNews} disabled={vipNewsLeft > 0 || !newsDraft.trim()}
+                          className="px-3 rounded-lg bg-amber-400 text-black text-xs font-black disabled:opacity-30 shrink-0">投稿</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button onClick={() => setView('SHOP')} className="w-full border-t border-white/10 p-2.5 text-[11px] text-gray-500 hover:text-amber-200 hover:bg-amber-400/5 transition font-bold text-left">
+                      🔒 VIP会員になると、このニュース欄に直接書き込めます（5分に1回）
+                    </button>
+                  )}
                 </Panel>
 
                 <Panel className="overflow-hidden">
@@ -603,13 +712,15 @@ export default function App() {
           </div>
         )}
 
-        {view === 'SLOT' && <ErrorBoundary onReset={() => setView('MENU')}><SlotMachine balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
+        {view === 'SLOT' && <ErrorBoundary onReset={() => setView('MENU')}><SlotMachine balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vip} /></ErrorBoundary>}
         {view === 'ROULETTE' && <ErrorBoundary onReset={() => setView('MENU')}><RouletteView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'REDBLACK' && <ErrorBoundary onReset={() => setView('MENU')}><RedBlackView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
-        {view === 'POKER' && <ErrorBoundary onReset={() => setView('MENU')}><PokerView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
+        {view === 'POKER' && <ErrorBoundary onReset={() => setView('MENU')}><PokerView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vip} /></ErrorBoundary>}
         {view === 'RACE' && <ErrorBoundary onReset={() => setView('MENU')}><HorseRacing balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'LABOR' && <ErrorBoundary onReset={() => setView('MENU')}><LaborView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
         {view === 'MINING' && <ErrorBoundary onReset={() => setView('MENU')}><MiningView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
+        {view === 'SHOP' && <ErrorBoundary onReset={() => setView('MENU')}><Shop balance={balance} vip={vip} vipSince={vipSince} onBuyVip={buyVip} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
+        {view === 'BLACKJACK' && <ErrorBoundary onReset={() => setView('MENU')}><Blackjack balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vip} /></ErrorBoundary>}
         {view === 'JANKEN' && <ErrorBoundary onReset={() => setView('MENU')}><JankenView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'INVEST' && <ErrorBoundary onReset={() => setView('MENU')}><InvestmentView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
 
@@ -722,7 +833,14 @@ export default function App() {
           <div className="p-6 md:p-12 max-w-3xl mx-auto">
             <button onClick={() => setView('MENU')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
             <Panel gold className="p-6 md:p-8">
-              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub="純資産ランキング（所持金＋預金−ローン）" />
+              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub={vip ? '純資産ランキング（VIP：損益の詳細つき）' : '純資産ランキング（所持金＋預金−ローン）'} />
+              {!vip && (
+                <button onClick={() => setView('SHOP')} className="w-full mb-4 p-3 rounded-xl bg-amber-400/5 border border-amber-400/20 text-left hover:bg-amber-400/10 transition">
+                  <span className="text-[11px] text-amber-200/80 font-bold flex items-center gap-1.5">
+                    <Crown size={13} /> VIP会員になると、ローン残高・信用スコア・通算収支・参加日まで見られます
+                  </span>
+                </button>
+              )}
               <div className="space-y-3">
                 {rankingData.length === 0 ? (
                   <p className="text-center text-gray-500 py-12">プレイヤーがまだ存在しません。</p>
@@ -734,15 +852,28 @@ export default function App() {
                       <div className="flex items-center gap-4 min-w-0">
                         <span className="w-8 text-center text-xl font-bold shrink-0">{rankBadge}</span>
                         <div className="min-w-0">
-                          <span className={`font-bold text-lg block truncate ${isSelf ? 'text-amber-300' : 'text-white'}`}>
-                            {player.name} {isSelf && <span className="text-[10px] bg-amber-400 text-black px-1.5 py-0.5 rounded ml-1 font-black">YOU</span>}
+                          <span className={`font-bold text-lg flex items-center gap-1.5 truncate ${isSelf ? 'text-amber-300' : player.vip ? 'text-amber-200' : 'text-white'}`}>
+                            {player.name}
+                            {player.vip && <VipBadge size="xs" />}
+                            {isSelf && <span className="text-[10px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-black">YOU</span>}
                           </span>
-                          <div className="flex flex-wrap items-center gap-x-3 text-[11px] text-gray-500 font-semibold">
-                            <span>手元:{player.balance.toLocaleString()}G</span>
-                            <span>銀行:{player.bankBalance.toLocaleString()}G</span>
-                            {player.loanBalance > 0 && <span className="text-red-400">ローン:{player.loanBalance.toLocaleString()}G</span>}
-                            <span className={getCreditColor(player.creditScore)}>{getCreditLabel(player.creditScore)}</span>
-                          </div>
+                          {vip ? (
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
+                              <span>手元:{player.balance.toLocaleString()}G</span>
+                              <span>銀行:{player.bankBalance.toLocaleString()}G</span>
+                              <span className={player.loanBalance > 0 ? 'text-red-400' : ''}>ローン:{player.loanBalance.toLocaleString()}G</span>
+                              <span className={getCreditColor(player.creditScore)}>信用 {getCreditLabel(player.creditScore)}({Math.floor(player.creditScore)})</span>
+                              <span className={player.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}>
+                                通算 {player.profit >= 0 ? '+' : ''}{player.profit.toLocaleString()}G
+                              </span>
+                              {player.createdAt > 0 && <span className="text-gray-600">{new Date(player.createdAt).toLocaleDateString('ja-JP')}〜</span>}
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-x-3 text-[11px] text-gray-500 font-semibold">
+                              <span>手元:{player.balance.toLocaleString()}G</span>
+                              <span>銀行:{player.bankBalance.toLocaleString()}G</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <span className="font-mono text-lg md:text-xl font-black text-amber-300 shrink-0">{player.total.toLocaleString()} G</span>
@@ -756,7 +887,7 @@ export default function App() {
       </div>
 
       <footer className="py-6 border-t border-white/5 text-center text-[11px] text-gray-600 tracking-widest">
-        © 2026 GRAND CASINO &amp; TURF — 20歳未満の入場はご遠慮ください（架空通貨G）
+        © 2026 YUTAPON CASINO &amp; TURF — 20歳未満の入場はご遠慮ください（架空通貨G）
       </footer>
     </div>
   );

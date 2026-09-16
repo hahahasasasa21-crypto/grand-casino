@@ -152,7 +152,7 @@ export function buildRaceCard(seed, opts = {}) {
     distance: course.distance,
     turf: weather.turf,
     entries,
-    raceName: `${course.grade} ${pick(rng, ['グランドカジノ記念', 'ターフチャレンジ', 'ゴールデンカップ', 'エメラルドステークス', 'ロイヤルマイル', 'クラウンダービー', 'ミッドナイト賞', 'フォーチュン特別'])}`,
+    raceName: `${course.grade} ${pick(rng, ['ユタポンカジノ記念', 'ターフチャレンジ', 'ゴールデンカップ', 'エメラルドステークス', 'ロイヤルマイル', 'クラウンダービー', 'ミッドナイト賞', 'フォーチュン特別'])}`,
   };
 }
 

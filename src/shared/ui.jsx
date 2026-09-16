@@ -129,6 +129,19 @@ export function VipBadge({ size = 'sm', className = '' }) {
   );
 }
 
+/** 長者番付1位のバッジ */
+export function TopBadge({ size = 'sm', className = '' }) {
+  const s = size === 'xs' ? 'text-[8px] px-1 py-0' : 'text-[10px] px-1.5 py-0.5';
+  return (
+    <span className={`inline-flex items-center gap-0.5 rounded-md font-black tracking-wider align-middle ${s} ${className}`}
+      style={{
+        background: 'linear-gradient(180deg,#fffbe8 0%,#ffd75e 40%,#c98a05 100%)',
+        color: '#4a2f00',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.8)',
+      }}>👑1位</span>
+  );
+}
+
 /** 名前＋VIPバッジ */
 export function PlayerName({ name, vip, size = 'sm', className = '' }) {
   return (

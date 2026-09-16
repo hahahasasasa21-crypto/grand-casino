@@ -9,6 +9,7 @@ import {
   REVEAL_FIELDS, REVEAL_LABEL, revealCost, commentaryFor, phaseOf, PHASE_LABEL,
 } from './engine';
 import { SKILL_BY_ID, SKILL_CATS } from './skills';
+import { ITEMS } from '../../shared/vip';
 import { Track3D, OvalMap, OrderBoard } from './RaceView';
 
 /* ==========================================================
@@ -21,6 +22,8 @@ import { Track3D, OvalMap, OrderBoard } from './RaceView';
 const RACE_SCREEN_SECONDS = 34;   // 1レースを画面上で何秒に圧縮するか
 const LOBBY_CHOICES = [30, 60, 120, 300];
 const BET_PRESETS = [100, 500, 1000, 5000, 10000];
+const MAX_SINGLE_PICKS = 5;   // 単勝・複勝は5頭までまとめ買い
+const MAX_COMBO_TICKETS = 2;  // 2頭以上の券種は1レース2組まで
 
 const raceRoomsRef = () => collection(db, 'artifacts', appId, 'public', 'data', 'raceRooms');
 const raceRoomDoc = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'raceRooms', id);
@@ -41,7 +44,7 @@ function StatBar({ value, color = '#34d399', hidden }) {
 }
 
 /* ---------- 出走馬カード ---------- */
-function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canReveal, disabled, ordered }) {
+function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canReveal, disabled, ordered, scopeMode }) {
   const has = (f) => revealed.includes(f);
   return (
     <div className={`rounded-xl border-2 p-2 transition ${picked ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40'}`}>
@@ -53,7 +56,11 @@ function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canR
           <button onClick={() => onPick(e.id)} disabled={disabled} className="block w-full text-left disabled:opacity-70">
             <div className="flex items-center gap-1.5">
               <span className="font-bold text-white text-[13px] truncate">{e.name}</span>
-              {picked && ordered && <span className="text-[9px] bg-amber-400 text-black font-black rounded px-1">{pickIndex + 1}着</span>}
+              {picked && (
+                <span className="text-[9px] bg-amber-400 text-black font-black rounded px-1.5 py-0.5 shrink-0">
+                  {ordered ? `${pickIndex + 1}着` : `${'①②③④⑤'[pickIndex] || pickIndex + 1}`}
+                </span>
+              )}
             </div>
             <div className="text-[10px] text-gray-500 truncate">
               {e.frame}枠{e.num}番・{e.jockey}・{RUNNING_STYLES[e.style].label}・{e.age}歳・{e.weight}kg
@@ -84,10 +91,12 @@ function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canR
                 if (!sk) return null;
                 const c = SKILL_CATS[sk.cat] || { color: '#94a3b8' };
                 return (
-                  <span key={sid} title={sk.desc}
-                    className="text-[9px] font-bold px-1.5 py-0.5 rounded-full border"
-                    style={{ color: c.color, borderColor: c.color + '55', background: c.color + '15' }}>
-                    {sk.bad ? '▽' : '▲'}{sk.name}
+                  <span key={sid} className="w-full flex items-start gap-1.5 rounded-lg px-1.5 py-1 border"
+                    style={{ borderColor: c.color + '44', background: c.color + '12' }}>
+                    <span className="text-[9px] font-black shrink-0" style={{ color: c.color }}>
+                      {sk.bad ? '▽' : '▲'}{sk.name}
+                    </span>
+                    <span className="text-[9px] text-gray-400 leading-snug">{sk.desc}</span>
                   </span>
                 );
               })
@@ -105,6 +114,10 @@ function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canR
             className="mt-1 text-[9px] font-black px-2 py-1 rounded-lg bg-sky-600/80 hover:bg-sky-500 text-white disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <Eye size={10} />{canReveal ? fmt(cost) : '全開示'}
           </button>
+          {scopeMode && (
+            <button onClick={() => onPick(e.id)}
+              className="mt-1 w-full text-[9px] font-black px-2 py-1 rounded-lg bg-amber-400 text-black">🔍 この馬に使う</button>
+          )}
         </div>
       </div>
     </div>
@@ -112,7 +125,7 @@ function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canR
 }
 
 /* ---------- 本体 ---------- */
-export default function HorseRacing({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
+export default function HorseRacing({ balance, updateBalance, onBack, showToast, playerName, emitNews, vip, items = {}, useItem }) {
   const [mode, setMode] = useState('MENU');          // MENU | SOLO | PUBLIC
   const [phase, setPhase] = useState('IDLE');        // IDLE | LOADING | BETTING | COUNTDOWN | RACING | RESULT
   const [progress, setProgress] = useState(0);
@@ -130,6 +143,8 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
   const [speedUp, setSpeedUp] = useState(false);
   const [skillFeed, setSkillFeed] = useState([]);
   const [tab, setTab] = useState('CARD');            // CARD | ROOM
+  const [charm, setCharm] = useState(false);        // 幸運のお守り（情報開示が半額）
+  const [scopeMode, setScopeMode] = useState(false);// 能力スコープの対象選択中
 
   // 公開レース
   const [rooms, setRooms] = useState([]);
@@ -177,6 +192,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
     setCard(withOdds);
     setReveals({}); setRevealsUsed(0); setPicks([]); setTickets([]);
     setResultOrder(null); setPayouts(null); setSkillFeed([]);
+    setCharm(false); setScopeMode(false);
     settledRef.current = false; startedRef.current = false;
     simRef.current = null;
     setCommentary('出走馬の能力は非公開です。コインを払って情報を集めましょう。');
@@ -185,7 +201,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
   }, []);
 
   /* ---------- 情報開示 ---------- */
-  const unitCost = revealCost(betAmount, revealsUsed);
+  const unitCost = Math.ceil(revealCost(betAmount, revealsUsed) * (charm ? 0.5 : 1));
   const doReveal = async (id) => {
     if (!card) return;
     const cur = reveals[id] || [];
@@ -198,41 +214,123 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
     setRevealsUsed(n => n + 1);
     playSfx('coin');
     const e = card.entries.find(x => x.id === id);
-    const val = field === 'speed' ? e.speed : field === 'stamina' ? e.stamina
-      : field === 'odds' ? `単勝${e.odds.toFixed(1)}倍（${e.popularity}番人気）`
-        : e.skills.map(s => SKILL_BY_ID[s]?.name).join('・');
-    showToast(`🔍 ${e.name} の【${REVEAL_LABEL[field]}】＝ ${val}`, 'success');
+    if (field === 'skills') {
+      const lines = e.skills.map(sid => { const sk = SKILL_BY_ID[sid]; return sk ? `${sk.bad ? '▽' : '▲'}${sk.name}：${sk.desc}` : ''; }).filter(Boolean);
+      showToast(`🔍 ${e.name} のスキル／ ${lines.join(' ／ ')}`, 'success');
+    } else {
+      const val = field === 'speed' ? e.speed : field === 'stamina' ? e.stamina
+        : `単勝${e.odds.toFixed(1)}倍（${e.popularity}番人気）`;
+      showToast(`🔍 ${e.name} の【${REVEAL_LABEL[field]}】＝ ${val}`, 'success');
+    }
   };
 
   /* ---------- 馬券 ---------- */
+  const isSingle = requiredPicks === 1;
+  const maxPicks = isSingle ? MAX_SINGLE_PICKS : requiredPicks;
+
   const togglePick = (id) => {
     if (phase !== 'BETTING') return;
+    if (scopeMode) { doScope(id); return; }
     setPicks(prev => {
       if (prev.includes(id)) return prev.filter(p => p !== id);
-      if (prev.length >= requiredPicks) return [...prev.slice(1), id];
+      if (prev.length >= maxPicks) {
+        showToast(isSingle
+          ? `単勝・複勝は ${MAX_SINGLE_PICKS}頭 まで選べます。`
+          : `${BET_TYPES[betType].label}は ${requiredPicks}頭 です。外してから選び直してください。`, 'warning');
+        return prev;
+      }
       return [...prev, id];
     });
   };
   useEffect(() => { setPicks([]); }, [betType]);
 
-  const expectedMult = picks.length === requiredPicks && card
-    ? payoutMultiplier(betType, picks, card.entries) : 0;
+  /** いま選んでいる馬で、券種ごとにいくらになるか */
+  const multByType = useMemo(() => {
+    const out = {};
+    if (!card) return out;
+    Object.values(BET_TYPES).forEach(b => {
+      if (picks.length < b.picks) { out[b.key] = 0; return; }
+      out[b.key] = payoutMultiplier(b.key, picks.slice(0, b.picks), card.entries) || 0;
+    });
+    return out;
+  }, [card, picks]);
+
+  const comboTickets = tickets.filter(t => BET_TYPES[t.type].picks >= 2).length;
+  const expectedMult = picks.length >= requiredPicks && card
+    ? payoutMultiplier(betType, picks.slice(0, requiredPicks), card.entries) : 0;
+  const ticketCount = isSingle ? picks.length : 1;
+  const totalCost = (Number(betAmount) || 0) * ticketCount;
 
   const buyTicket = async () => {
     if (!card) return;
-    if (picks.length !== requiredPicks) { showToast(`${BET_TYPES[betType].label}は${requiredPicks}頭選んでください。`, 'error'); return; }
+    if (picks.length < requiredPicks) { showToast(`${BET_TYPES[betType].label}は${requiredPicks}頭選んでください。`, 'error'); return; }
     const amount = Math.floor(Number(betAmount) || 0);
     if (amount < 100) { showToast('100G以上を指定してください。', 'error'); return; }
-    if (balance < amount) { showToast('残高が足りません。', 'error'); return; }
-    try { await updateBalance(-amount); } catch (e) { return; }
-    const t = { type: betType, picks: [...picks], amount, mult: payoutMultiplier(betType, picks, card.entries) };
-    setTickets(prev => [...prev, t]);
+
+    // 1頭選択の券種は選んだ頭数ぶんをまとめ買い、2頭以上は1組ずつ（1レース2組まで）
+    const groups = isSingle ? picks.map(id => [id]) : [picks.slice(0, requiredPicks)];
+    if (!isSingle && comboTickets + 1 > MAX_COMBO_TICKETS) {
+      showToast(`${BET_TYPES[betType].label}など2頭以上の券種は1レース ${MAX_COMBO_TICKETS}組 までです。`, 'warning');
+      return;
+    }
+    const cost = amount * groups.length;
+    if (balance < cost) { showToast('残高が足りません。', 'error'); return; }
+    try { await updateBalance(-cost); } catch (e) { return; }
+
+    const made = groups.map(g => ({
+      type: betType, picks: [...g], amount,
+      mult: payoutMultiplier(betType, g, card.entries),
+    }));
+    setTickets(prev => [...prev, ...made]);
     setPicks([]);
     playSfx('coin');
-    showToast(`🎫 ${BET_TYPES[betType].label} ${t.picks.join('-')} を ${fmt(amount)}G 購入`, 'success');
+    showToast(made.length > 1
+      ? `🎫 ${BET_TYPES[betType].label} を ${made.length}点（計 ${fmt(cost)}G）購入`
+      : `🎫 ${BET_TYPES[betType].label} ${made[0].picks.join('-')} を ${fmt(amount)}G 購入`, 'success');
     if (mode === 'PUBLIC' && roomId) {
-      try { await addDoc(ticketsRef(roomId), { ...t, player: playerName, at: Date.now() }); } catch (e) { /* noop */ }
+      for (const t of made) {
+        try { await addDoc(ticketsRef(roomId), { ...t, player: playerName, at: Date.now() }); } catch (e) { /* noop */ }
+      }
     }
+  };
+
+  /* ---------- 道具 ---------- */
+  const revealAll = (field) => {
+    setReveals(prev => {
+      const n = { ...prev };
+      card.entries.forEach(e => { n[e.id] = [...new Set([...(n[e.id] || []), field])]; });
+      return n;
+    });
+  };
+  const useOddsTicket = async () => {
+    if ((items[ITEMS.ODDS_TICKET.key] || 0) <= 0) return;
+    if (!(await useItem(ITEMS.ODDS_TICKET.key))) { showToast('チケットを使えませんでした。', 'error'); return; }
+    revealAll('odds');
+    playSfx('coin');
+    showToast('🎫 全頭のオッズを開示しました！', 'success');
+  };
+  const useSkillBook = async () => {
+    if ((items[ITEMS.SKILL_BOOK.key] || 0) <= 0) return;
+    if (!(await useItem(ITEMS.SKILL_BOOK.key))) { showToast('名鑑を使えませんでした。', 'error'); return; }
+    revealAll('skills');
+    playSfx('coin');
+    showToast('📜 全頭のスキルを開示しました！', 'success');
+  };
+  const useCharm = async () => {
+    if (charm || (items[ITEMS.CHARM.key] || 0) <= 0) return;
+    if (!(await useItem(ITEMS.CHARM.key))) { showToast('お守りを使えませんでした。', 'error'); return; }
+    setCharm(true);
+    playSfx('coin');
+    showToast('🍀 このレースの情報開示が半額になりました！', 'success');
+  };
+  const doScope = async (id) => {
+    setScopeMode(false);
+    if ((items[ITEMS.FULL_SCOPE.key] || 0) <= 0) return;
+    if (!(await useItem(ITEMS.FULL_SCOPE.key))) { showToast('スコープを使えませんでした。', 'error'); return; }
+    setReveals(prev => ({ ...prev, [id]: [...REVEAL_FIELDS] }));
+    playSfx('coin');
+    const e = card.entries.find(x => x.id === id);
+    showToast(`🔍 ${e.name} の全情報を開示しました！`, 'success');
   };
 
   /* ---------- 精算 ---------- */
@@ -756,17 +854,60 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                 </p>
               </Panel>
 
+              {/* 道具 */}
+              {(items[ITEMS.ODDS_TICKET.key] || items[ITEMS.SKILL_BOOK.key] || items[ITEMS.FULL_SCOPE.key] || items[ITEMS.CHARM.key] || charm) ? (
+                <Panel className="p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <h3 className="text-sm font-black text-white flex items-center gap-1.5">🎒 道具</h3>
+                    {charm && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">🍀 開示半額</span>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {[
+                      { it: ITEMS.ODDS_TICKET, on: useOddsTicket, disabled: phase !== 'BETTING' },
+                      { it: ITEMS.SKILL_BOOK, on: useSkillBook, disabled: phase !== 'BETTING' },
+                      { it: ITEMS.FULL_SCOPE, on: () => setScopeMode(v => !v), disabled: phase !== 'BETTING' },
+                      { it: ITEMS.CHARM, on: useCharm, disabled: phase !== 'BETTING' || charm },
+                    ].map(({ it, on, disabled }) => {
+                      const n = items[it.key] || 0;
+                      return (
+                        <button key={it.key} onClick={on} disabled={disabled || n <= 0}
+                          className={`flex items-center gap-1.5 p-2 rounded-lg border text-left transition disabled:opacity-30
+                            ${it.key === ITEMS.FULL_SCOPE.key && scopeMode ? 'bg-amber-400/20 border-amber-400' : 'bg-black/40 border-white/10 hover:bg-white/5'}`}>
+                          <span className="text-lg leading-none">{it.icon}</span>
+                          <span className="min-w-0">
+                            <span className="block text-[10px] font-black text-white truncate">{it.name}</span>
+                            <span className="block text-[9px] text-gray-500">{it.short} ×{n}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {scopeMode && <p className="text-[10px] text-amber-300 font-bold mt-1.5">出馬表から対象の馬を選んでください。</p>}
+                </Panel>
+              ) : null}
+
               {/* 馬券種別 */}
               <Panel className="p-3">
                 <div className="grid grid-cols-4 gap-1 mb-2">
-                  {Object.values(BET_TYPES).map(b => (
-                    <button key={b.key} onClick={() => setBetType(b.key)} disabled={phase !== 'BETTING'}
-                      className={`py-1.5 rounded-lg text-[11px] font-black border transition disabled:opacity-50 ${betType === b.key ? 'bg-amber-400 text-black border-amber-300' : 'bg-black/40 text-gray-400 border-white/10'}`}>
-                      {b.label}
-                    </button>
-                  ))}
+                  {Object.values(BET_TYPES).map(b => {
+                    const m = multByType[b.key] || 0;
+                    return (
+                      <button key={b.key} onClick={() => setBetType(b.key)} disabled={phase !== 'BETTING'}
+                        className={`py-1 rounded-lg text-[11px] font-black border transition disabled:opacity-50 leading-tight ${betType === b.key ? 'bg-amber-400 text-black border-amber-300' : 'bg-black/40 text-gray-400 border-white/10'}`}>
+                        <span className="block">{b.label}</span>
+                        <span className={`block text-[9px] font-mono ${betType === b.key ? 'text-black/70' : m > 0 ? 'text-amber-300' : 'text-gray-600'}`}>
+                          {m > 0 ? `${m}倍` : `${b.picks}頭`}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
-                <p className="text-[10px] text-gray-500 mb-2">{BET_TYPES[betType].desc}（{requiredPicks}頭選択{BET_TYPES[betType].ordered ? '・着順どおり' : ''}）</p>
+                <p className="text-[10px] text-gray-500 mb-2">
+                  {BET_TYPES[betType].desc}（{requiredPicks}頭選択{BET_TYPES[betType].ordered ? '・押した順が着順' : ''}）
+                  {isSingle
+                    ? <span className="text-amber-300/80"> ／ {MAX_SINGLE_PICKS}頭までまとめ買いできます</span>
+                    : <span className="text-amber-300/80"> ／ 1レース{MAX_COMBO_TICKETS}組まで（購入済み {comboTickets}組）</span>}
+                </p>
 
                 <div className="flex flex-wrap gap-1 mb-2">
                   {BET_PRESETS.map(v => (
@@ -783,12 +924,12 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="text-gray-400">選択：<span className="font-mono text-white">{picks.length ? picks.join('-') : '—'}</span></span>
                   {expectedMult > 0 && (
-                    <span className="text-gray-400">払戻 <span className="text-amber-300 font-black">{fmt(Math.floor((Number(betAmount) || 0) * expectedMult))}G</span>（{expectedMult}倍）</span>
+                    <span className="text-gray-400">的中 <span className="text-amber-300 font-black">{fmt(Math.floor((Number(betAmount) || 0) * expectedMult))}G</span>（{expectedMult}倍）</span>
                   )}
                 </div>
-                <GoldButton onClick={buyTicket} disabled={phase !== 'BETTING' || picks.length !== requiredPicks}
+                <GoldButton onClick={buyTicket} disabled={phase !== 'BETTING' || picks.length < requiredPicks}
                   className="w-full py-2.5 flex items-center justify-center gap-2">
-                  <Ticket size={16} /> 馬券を購入
+                  <Ticket size={16} /> {isSingle && picks.length > 1 ? `${picks.length}点を購入（${fmt(totalCost)}G）` : '馬券を購入'}
                 </GoldButton>
                 {tickets.length > 0 && (
                   <div className="mt-2 space-y-1">
@@ -817,7 +958,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                       const idx = picks.indexOf(e.id);
                       return (
                         <EntryRow key={e.id} e={e} revealed={rev}
-                          picked={idx >= 0} pickIndex={idx} ordered={BET_TYPES[betType].ordered}
+                          picked={idx >= 0} pickIndex={idx} ordered={BET_TYPES[betType].ordered} scopeMode={scopeMode}
                           onPick={togglePick} onReveal={doReveal}
                           cost={unitCost} canReveal={phase === 'BETTING' && rev.length < REVEAL_FIELDS.length && balance >= unitCost}
                           disabled={phase !== 'BETTING'} />

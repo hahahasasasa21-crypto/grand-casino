@@ -3,10 +3,14 @@ import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, deleteDoc, where } from 'firebase/firestore';
 import { Coins, Trophy, ArrowLeft, AlertCircle, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, TrendingUp, Lock, Newspaper, Pickaxe, BookOpen, History, ShoppingBag, Crown } from 'lucide-react';
 import { db, auth, appId, postNews } from './shared/firebase';
-import { FeltBackdrop, Panel, GoldButton, SectionTitle, ErrorBoundary, VipBadge, TAU } from './shared/ui';
-import { VIP_PRICE, VIP_NEWS_COOLDOWN, VIP_NEWS_MAX_LEN, newsCooldownLeft } from './shared/vip';
+import { FeltBackdrop, Panel, GoldButton, SectionTitle, ErrorBoundary, VipBadge, TopBadge, TAU } from './shared/ui';
+import {
+  VIP_PRICE, VIP_NEWS_COOLDOWN, VIP_NEWS_MAX_LEN, VIP_SUB_PRICE, VIP_SUB_MS,
+  loanState, effectiveVip, goldPrice, goldSellPrice, GOLD_BASE, ITEMS,
+} from './shared/vip';
 import Shop from './views/Shop';
 import Blackjack from './games/Blackjack';
+import LifeGame from './games/life';
 import SlotMachine from './games/SlotMachine';
 import RedBlackView from './games/RedBlack';
 import PokerView from './games/Poker';
@@ -85,6 +89,12 @@ export default function App() {
   const [vip, setVip] = useState(false);
   const [vipSince, setVipSince] = useState(0);
   const [lastVipNewsAt, setLastVipNewsAt] = useState(0);
+  const [vipSubUntil, setVipSubUntil] = useState(0);
+  const [loanStartAt, setLoanStartAt] = useState(0);
+  const [items, setItems] = useState({});
+  const [gold, setGold] = useState(0);
+  const [marketProfit, setMarketProfit] = useState(0);
+  const [topPlayer, setTopPlayer] = useState('');
   const [newsDraft, setNewsDraft] = useState('');
   const [newsTick, setNewsTick] = useState(0);
   const [view, setView] = useState('LOGIN');
@@ -113,12 +123,6 @@ export default function App() {
     const iv = setInterval(() => setNewsTick(t => t + 1), 1000);
     return () => clearInterval(iv);
   }, []);
-  // 背景色（下までスクロールしても白くならないように）
-  useEffect(() => {
-    const c = vip ? '#140b05' : '#07100c';
-    document.documentElement.style.backgroundColor = c;
-    document.body.style.backgroundColor = c;
-  }, [vip]);
 
   useEffect(() => {
     let alive = true;
@@ -147,6 +151,12 @@ export default function App() {
         setVip(d.vip === true);
         setVipSince(d.vipSince || 0);
         setLastVipNewsAt(d.lastVipNewsAt || 0);
+        setVipSubUntil(d.vipSubUntil || 0);
+        setLoanStartAt(d.loanStartAt || 0);
+        setItems(d.items || {});
+        setGold(d.gold || 0);
+        maintainLoanFlag(d, docRef);
+        maintainSubscription(d, docRef);
         setTransferHistory(d.transferHistory || []);
         calcOfflineInterest(d, docRef);
         calcLoanInterest(d, docRef);
@@ -156,7 +166,8 @@ export default function App() {
           balance: 10000, bankBalance: 0, loanBalance: 0,
           creditScore: 100, lastInterestTime: now, lastLoanTime: now,
           createdAt: now, name: playerName, password: passwordRef.current,
-          vip: false, vipSince: 0, lastVipNewsAt: 0,
+          vip: false, vipSince: 0, lastVipNewsAt: 0, vipSubUntil: 0,
+          loanStartAt: 0, items: {}, gold: 0,
           transferHistory: []
         });
       }
@@ -207,7 +218,7 @@ export default function App() {
 
   // ランキング購読
   useEffect(() => {
-    if (!user || (view !== 'RANKING' && view !== 'MENU')) return;
+    if (!user || (view !== 'RANKING' && view !== 'MENU' && view !== 'SHOP')) return;
     const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
     const unsub = onSnapshot(collRef, snap => {
       const players = [];
@@ -215,7 +226,7 @@ export default function App() {
         const data = d.data();
         let name = data.name;
         if (!name) { try { name = decodeURIComponent(d.id); } catch (e) { name = d.id; } }
-        const total = (data.balance || 0) + (data.bankBalance || 0) - (data.loanBalance || 0);
+        const total = (data.balance || 0) + (data.bankBalance || 0) - (data.loanBalance || 0) + (data.gold || 0) * GOLD_BASE;
         players.push({
           name,
           balance: data.balance || 0,
@@ -230,9 +241,41 @@ export default function App() {
       });
       players.sort((a, b) => b.total - a.total);
       setRankingData(players.slice(0, 20));
+      setMarketProfit(players.reduce((a, p) => a + p.profit, 0));
+      setTopPlayer(players.length ? players[0].name : '');
     });
     return () => unsub();
   }, [user, view]);
+
+  /** ローンの発生時刻を維持（完済したらリセット） */
+  const maintainLoanFlag = async (data, docRef) => {
+    const loan = data.loanBalance || 0;
+    if (loan > 0 && !data.loanStartAt) {
+      try { await updateDoc(docRef, { loanStartAt: Date.now() }); } catch (e) { /* noop */ }
+    } else if (loan <= 0 && data.loanStartAt) {
+      try { await updateDoc(docRef, { loanStartAt: 0 }); } catch (e) { /* noop */ }
+    }
+  };
+
+  /** VIP定期購入の自動更新（残高不足なら自動解約） */
+  const subBusyRef = useRef(false);
+  const maintainSubscription = async (data, docRef) => {
+    if (subBusyRef.current) return;
+    const until = data.vipSubUntil || 0;
+    if (!until || data.vip === true) return;
+    if (Date.now() < until) return;
+    subBusyRef.current = true;
+    try {
+      if ((data.balance || 0) >= VIP_SUB_PRICE) {
+        await updateDoc(docRef, { balance: increment(-VIP_SUB_PRICE), vipSubUntil: Date.now() + VIP_SUB_MS });
+        showToast(`👑 VIP定期購入を更新しました（-${VIP_SUB_PRICE.toLocaleString()} G）`, 'info');
+      } else {
+        await updateDoc(docRef, { vipSubUntil: 0 });
+        showToast('👑 所持金が足りず、VIP定期購入は自動解約されました。', 'warning');
+      }
+    } catch (e) { /* noop */ }
+    finally { setTimeout(() => { subBusyRef.current = false; }, 3000); }
+  };
 
   const calcOfflineInterest = async (data, docRef) => {
     const now = Date.now();
@@ -310,9 +353,92 @@ export default function App() {
     } else showToast('まだ資産があります！', 'error');
   };
 
-  /* ---------- VIP ---------- */
+  /* ---------- VIP・ショップ ---------- */
+  const delinq = useMemo(() => loanState(loanBalance, loanStartAt), [loanBalance, loanStartAt, newsTick]);
+  const vipPlan = vip === true || vipSubUntil > Date.now();
+  const vipActive = effectiveVip({ vip, vipSubUntil, delinquent: delinq.delinquent });
+  const goldPx = useMemo(() => goldPrice(marketProfit), [marketProfit]);
+
+  // 背景色（下までスクロールしても白くならないように）
+  useEffect(() => {
+    const c = vipActive ? '#140b05' : '#07100c';
+    document.documentElement.style.backgroundColor = c;
+    document.body.style.backgroundColor = c;
+  }, [vipActive]);
+
+  // 延滞に入った／解けたときのお知らせ
+  const wasDelinqRef = useRef(false);
+  useEffect(() => {
+    if (delinq.delinquent && !wasDelinqRef.current) {
+      wasDelinqRef.current = true;
+      showToast('🚫 ローンの延滞です。ショップが利用できなくなり、VIP特典も一時停止されます。', 'error');
+    } else if (!delinq.delinquent && wasDelinqRef.current) {
+      wasDelinqRef.current = false;
+      if (vipPlan) showToast('✅ 延滞が解消されました。VIP特典が復帰しました。', 'success');
+    }
+  }, [delinq.delinquent, vipPlan, showToast]);
+
+  const subscribeVip = useCallback(async () => {
+    if (vip) return;
+    if (balance < VIP_SUB_PRICE) { showToast('所持金が足りません。', 'error'); return; }
+    try {
+      await updateDoc(playerRef(playerName), {
+        balance: increment(-VIP_SUB_PRICE),
+        vipSubUntil: Date.now() + VIP_SUB_MS,
+      });
+      showToast('👑 VIP定期購入に加入しました！', 'success');
+      postNews(db, appId, `👑 ${playerName} が VIP会員になりました！`, 'jackpot');
+    } catch (e) { showToast('加入に失敗しました。', 'error'); }
+  }, [vip, balance, playerName, playerRef, showToast]);
+
+  const cancelVipSub = useCallback(async () => {
+    try {
+      await updateDoc(playerRef(playerName), { vipSubUntil: 0 });
+      showToast('VIP定期購入を解約しました。', 'info');
+    } catch (e) { showToast('解約に失敗しました。', 'error'); }
+  }, [playerName, playerRef, showToast]);
+
+  const buyItem = useCallback(async (item) => {
+    if (delinq.delinquent) { showToast('延滞中はショップを利用できません。', 'error'); return; }
+    if (item.vipOnly && !vipActive) { showToast('この商品はVIP会員限定です。', 'warning'); return; }
+    if (balance < item.price) { showToast('所持金が足りません。', 'error'); return; }
+    try {
+      await updateDoc(playerRef(playerName), {
+        balance: increment(-item.price),
+        [`items.${item.key}`]: increment(1),
+      });
+      showToast(`${item.icon} ${item.name} を購入しました！`, 'success');
+    } catch (e) { showToast('購入に失敗しました。', 'error'); }
+  }, [delinq.delinquent, vipActive, balance, playerName, playerRef, showToast]);
+
+  /** アイテムを1つ消費する。成功したら true */
+  const useItem = useCallback(async (key) => {
+    if ((items[key] || 0) <= 0) return false;
+    try {
+      await updateDoc(playerRef(playerName), { [`items.${key}`]: increment(-1) });
+      return true;
+    } catch (e) { return false; }
+  }, [items, playerName, playerRef]);
+
+  const tradeGold = useCallback(async (side, qty) => {
+    const n = Math.max(1, Math.floor(qty || 1));
+    if (delinq.delinquent) { showToast('延滞中はショップを利用できません。', 'error'); return; }
+    if (side === 'BUY') {
+      const cost = goldPx * n;
+      if (balance < cost) { showToast('所持金が足りません。', 'error'); return; }
+      await updateDoc(playerRef(playerName), { balance: increment(-cost), gold: increment(n) }).catch(() => { });
+      showToast(`🥇 金を ${n} 本 購入しました（-${cost.toLocaleString()} G）`, 'success');
+    } else {
+      if (gold < n) { showToast('保有している金が足りません。', 'error'); return; }
+      const got = goldSellPrice(goldPx) * n;
+      await updateDoc(playerRef(playerName), { balance: increment(got), gold: increment(-n) }).catch(() => { });
+      showToast(`🥇 金を ${n} 本 売却しました（+${got.toLocaleString()} G）`, 'success');
+    }
+  }, [delinq.delinquent, balance, gold, goldPx, playerName, playerRef, showToast]);
+
   const buyVip = useCallback(async () => {
     if (vip) return;
+    if (delinq.delinquent) { showToast('延滞中はショップを利用できません。', 'error'); return; }
     if (balance < VIP_PRICE) { showToast('所持金が足りません。', 'error'); return; }
     try {
       await updateDoc(playerRef(playerName), {
@@ -326,9 +452,9 @@ export default function App() {
     } catch (e) {
       showToast('購入に失敗しました。', 'error');
     }
-  }, [vip, balance, playerName, playerRef, showToast]);
+  }, [vip, delinq.delinquent, balance, playerName, playerRef, showToast]);
 
-  const vipNewsLeft = useMemo(() => newsCooldownLeft(lastVipNewsAt), [lastVipNewsAt, newsTick]);
+  const vipNewsLeft = useMemo(() => (lastVipNewsAt ? Math.max(0, VIP_NEWS_COOLDOWN - (Date.now() - lastVipNewsAt)) : 0), [lastVipNewsAt, newsTick]);
   const postVipNews = async () => {
     const msg = newsDraft.trim();
     if (!vip) return;
@@ -377,7 +503,8 @@ export default function App() {
       balance: increment(amount),
       loanBalance: increment(amount),
       lastLoanTime: Date.now(),
-      creditScore: increment(-5)
+      creditScore: increment(-5),
+      ...(loanBalance <= 0 ? { loanStartAt: Date.now() } : {}),
     });
     showToast(`💰 ${amount.toLocaleString()} G 借入しました。信用度 -5`, 'warning');
     setLoanInput('');
@@ -388,12 +515,16 @@ export default function App() {
     if (isNaN(amount) || amount <= 0) { showToast('有効な数値を入力してください。', 'error'); return; }
     if (balance < amount) { showToast('所持金が足りません！', 'error'); return; }
     if (loanBalance < amount) { showToast('返済額がローン残高を超えています！', 'error'); return; }
+    const willClear = loanBalance - amount <= 0;
     await updateDoc(playerRef(playerName), {
       balance: increment(-amount),
       loanBalance: increment(-amount),
-      creditScore: increment(-15)
+      creditScore: increment(-15),
+      ...(willClear ? { loanStartAt: 0 } : {}),
     });
-    showToast(`✅ ${amount.toLocaleString()} G 返済！信用度 -15`, 'warning');
+    showToast(willClear
+      ? `✅ ${amount.toLocaleString()} G 返済！ローンを完済しました。`
+      : `✅ ${amount.toLocaleString()} G 返済！信用度 -15`, willClear ? 'success' : 'warning');
     setLoanInput('');
   };
 
@@ -457,12 +588,12 @@ export default function App() {
     { id: 'RACE', tag: 'Racing', title: 'VIRTUAL TURF', desc: '能力非公開・50種スキル・公開レース対応', emoji: '🏇', ring: 'from-lime-900/70 to-emerald-950' },
     { id: 'BLACKJACK', tag: 'VIP Room', title: 'BLACKJACK', desc: '6デッキ・3:2配当・スプリット/ダブル対応', emoji: '🃏', ring: 'from-amber-900/70 to-yellow-950', vipOnly: true },
     { id: 'JANKEN', tag: 'Online', title: 'オンラインじゃんけん', desc: 'ルーム制2人対戦・チャット付き', emoji: '✊', ring: 'from-pink-900/70 to-rose-950' },
-    { id: 'LIFE', tag: 'Online', title: 'オンライン人生ゲーム', desc: 'みんなで回す人生の盤上ゲーム', emoji: '🎲', ring: 'from-slate-800/70 to-slate-950', locked: true, lockNote: '準備中' },
+    { id: 'LIFE', tag: 'Online', title: 'オンライン人生ゲーム', desc: '最大6人・ルーレットで進む人生の盤上ゲーム', emoji: '🎲', ring: 'from-indigo-900/70 to-slate-950' },
   ];
 
   if (loadingMsg) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#07100c] text-white">
-      <FeltBackdrop vip={vip} />
+      <FeltBackdrop vip={vipActive} />
       <RefreshCw className="animate-spin text-amber-400 mb-4" size={48} />
       <p className="font-bold text-lg tracking-widest">{loadingMsg}</p>
     </div>
@@ -470,7 +601,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen text-white font-sans relative flex flex-col justify-between">
-      <FeltBackdrop vip={vip} />
+      <FeltBackdrop vip={vipActive} />
 
       {toastMsg && (
         <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[60] px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 font-bold max-w-[90vw] text-center ${toastColors[toastType]}`}>
@@ -528,8 +659,9 @@ export default function App() {
               <div>
                 <h1 className="text-3xl md:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-b from-amber-200 to-amber-500 mb-1">YUTAPON CASINO</h1>
                 <p className="text-gray-400 font-medium flex items-center gap-1.5">
-                  おかえりなさい、<span className={`font-bold ${vip ? 'text-amber-200' : 'text-white'}`}>{playerName}</span>
-                  {vip && <VipBadge size="sm" />} 様
+                  おかえりなさい、<span className={`font-bold ${vipActive ? 'text-amber-200' : 'text-white'}`}>{playerName}</span>
+                  {playerName === topPlayer && <TopBadge size="sm" />}
+                  {vipActive && <VipBadge size="sm" />} 様
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3">
@@ -556,7 +688,7 @@ export default function App() {
                   <p className="text-[11px] text-amber-200/50 uppercase tracking-[0.3em] font-bold mb-3">Game Floor</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     {gameCards.filter(g => g.id !== 'RACE' || HORSE_RACING_EVENT_ACTIVE).map(g => {
-                      const needsVip = g.vipOnly && !vip;
+                      const needsVip = g.vipOnly && !vipActive;
                       const locked = g.locked;
                       return (
                         <button key={g.id}
@@ -604,13 +736,13 @@ export default function App() {
 
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {[
-                    { id: 'SHOP', label: 'ショップ', sub: vip ? 'VIP会員です' : 'VIP券を購入', icon: <ShoppingBag size={20} />, tone: 'text-amber-300' },
+                    { id: 'SHOP', label: 'ショップ', sub: delinq.delinquent ? '延滞中・利用停止' : vipActive ? 'VIP会員です' : '道具・金・VIP券', icon: <ShoppingBag size={20} />, tone: delinq.delinquent ? 'text-red-400' : 'text-amber-300' },
                     { id: 'BANK', label: 'ユタポンバンク', sub: '預金・借入・信用度', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
                     { id: 'TRANSFER', label: 'オンライン送金', sub: '他プレイヤーへ送金', icon: <Send size={20} />, tone: 'text-sky-300' },
                     { id: 'INVEST', label: '人物株投資', sub: '他プレイヤーに投資', icon: <TrendingUp size={20} />, tone: 'text-cyan-300' },
                     { id: 'RANKING', label: '長者番付', sub: 'トップ10', icon: <Trophy size={20} />, tone: 'text-amber-300' },
                   ].map(s => (
-                    <button key={s.id} onClick={() => setView(s.id)} className="flex items-center justify-between p-4 bg-black/40 hover:bg-black/60 rounded-2xl border border-white/10 hover:border-amber-400/30 transition">
+                    <button key={s.id} onClick={() => { if (s.id === 'SHOP' && delinq.delinquent) { showToast('ローン延滞中のためショップは利用できません。', 'error'); } setView(s.id); }} className="flex items-center justify-between p-4 bg-black/40 hover:bg-black/60 rounded-2xl border border-white/10 hover:border-amber-400/30 transition">
                       <div className="flex items-center gap-3">
                         <div className={`p-2.5 bg-white/5 rounded-xl ${s.tone}`}>{s.icon}</div>
                         <div className="text-left"><span className="font-bold text-white block text-sm">{s.label}</span><span className="text-[11px] text-gray-400">{s.sub}</span></div>
@@ -656,7 +788,7 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  {vip ? (
+                  {vipActive ? (
                     <div className="border-t border-amber-400/20 p-2.5 bg-amber-400/5">
                       <div className="flex items-center gap-1.5 mb-1.5">
                         <VipBadge size="xs" />
@@ -712,15 +844,16 @@ export default function App() {
           </div>
         )}
 
-        {view === 'SLOT' && <ErrorBoundary onReset={() => setView('MENU')}><SlotMachine balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vip} /></ErrorBoundary>}
+        {view === 'SLOT' && <ErrorBoundary onReset={() => setView('MENU')}><SlotMachine balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
         {view === 'ROULETTE' && <ErrorBoundary onReset={() => setView('MENU')}><RouletteView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'REDBLACK' && <ErrorBoundary onReset={() => setView('MENU')}><RedBlackView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
-        {view === 'POKER' && <ErrorBoundary onReset={() => setView('MENU')}><PokerView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vip} /></ErrorBoundary>}
-        {view === 'RACE' && <ErrorBoundary onReset={() => setView('MENU')}><HorseRacing balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
+        {view === 'POKER' && <ErrorBoundary onReset={() => setView('MENU')}><PokerView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
+        {view === 'RACE' && <ErrorBoundary onReset={() => setView('MENU')}><HorseRacing balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} items={items} useItem={useItem} /></ErrorBoundary>}
         {view === 'LABOR' && <ErrorBoundary onReset={() => setView('MENU')}><LaborView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
         {view === 'MINING' && <ErrorBoundary onReset={() => setView('MENU')}><MiningView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
-        {view === 'SHOP' && <ErrorBoundary onReset={() => setView('MENU')}><Shop balance={balance} vip={vip} vipSince={vipSince} onBuyVip={buyVip} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
-        {view === 'BLACKJACK' && <ErrorBoundary onReset={() => setView('MENU')}><Blackjack balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vip} /></ErrorBoundary>}
+        {view === 'LIFE' && <ErrorBoundary onReset={() => setView('MENU')}><LifeGame balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
+        {view === 'SHOP' && <ErrorBoundary onReset={() => setView('MENU')}><Shop balance={balance} vip={vip} vipSince={vipSince} vipSubUntil={vipSubUntil} vipActive={vipActive} delinquent={delinq.delinquent} delinquentInfo={delinq} items={items} gold={gold} goldPx={goldPx} marketProfit={marketProfit} onBuyVip={buyVip} onSubscribe={subscribeVip} onCancelSub={cancelVipSub} onBuyItem={buyItem} onTradeGold={tradeGold} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
+        {view === 'BLACKJACK' && <ErrorBoundary onReset={() => setView('MENU')}><Blackjack balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
         {view === 'JANKEN' && <ErrorBoundary onReset={() => setView('MENU')}><JankenView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'INVEST' && <ErrorBoundary onReset={() => setView('MENU')}><InvestmentView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
 
@@ -833,8 +966,8 @@ export default function App() {
           <div className="p-6 md:p-12 max-w-3xl mx-auto">
             <button onClick={() => setView('MENU')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
             <Panel gold className="p-6 md:p-8">
-              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub={vip ? '純資産ランキング（VIP：損益の詳細つき）' : '純資産ランキング（所持金＋預金−ローン）'} />
-              {!vip && (
+              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub={vipActive ? '純資産ランキング（VIP：損益の詳細つき）' : '純資産ランキング（所持金＋預金−ローン＋金）'} />
+              {!vipActive && (
                 <button onClick={() => setView('SHOP')} className="w-full mb-4 p-3 rounded-xl bg-amber-400/5 border border-amber-400/20 text-left hover:bg-amber-400/10 transition">
                   <span className="text-[11px] text-amber-200/80 font-bold flex items-center gap-1.5">
                     <Crown size={13} /> VIP会員になると、ローン残高・信用スコア・通算収支・参加日まで見られます
@@ -854,10 +987,11 @@ export default function App() {
                         <div className="min-w-0">
                           <span className={`font-bold text-lg flex items-center gap-1.5 truncate ${isSelf ? 'text-amber-300' : player.vip ? 'text-amber-200' : 'text-white'}`}>
                             {player.name}
+                            {index === 0 && <TopBadge size="xs" />}
                             {player.vip && <VipBadge size="xs" />}
                             {isSelf && <span className="text-[10px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-black">YOU</span>}
                           </span>
-                          {vip ? (
+                          {vipActive ? (
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
                               <span>手元:{player.balance.toLocaleString()}G</span>
                               <span>銀行:{player.bankBalance.toLocaleString()}G</span>
@@ -1466,7 +1600,7 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
       const rev = [...revealed]; rev[idx] = true;
       setRevealed(rev); setExploded(idx); setResult('LOSE'); setPhase('RESULT');
       showToast('💥 爆発！参加費は没収です', 'error');
-      emitNews(`💥 ${playerName} が${lvl.label}で爆発…`, 'loss');
+      if (lvl.label === '地獄坑道') emitNews(`💥 ${playerName} が${lvl.label}で爆発…`, 'loss');
       return;
     }
 
@@ -1480,7 +1614,7 @@ function MiningView({ balance, updateBalance, onBack, showToast, playerName, emi
       setResult('WIN'); setPhase('RESULT');
       try { await updateBalance(lvl.reward); } catch (e) { /* noop */ }
       showToast(`⛏️ 採掘成功！+${lvl.reward.toLocaleString()} G`, 'success');
-      emitNews(`⛏️ ${playerName} が${lvl.label}の採掘に成功！${lvl.reward.toLocaleString()} G 獲得！`, 'mining');
+      if (lvl.label === '地獄坑道') emitNews(`⛏️ ${playerName} が${lvl.label}の採掘に成功！${lvl.reward.toLocaleString()} G 獲得！`, 'mining');
     }
   };
 

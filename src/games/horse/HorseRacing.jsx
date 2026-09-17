@@ -244,20 +244,28 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
   };
   useEffect(() => { setPicks([]); }, [betType]);
 
-  /** いま選んでいる馬で、券種ごとにいくらになるか */
+  /** 倍率はオッズから決まるので、選んだ馬すべてのオッズを開示していないと見せない */
+  const oddsKnown = useCallback(
+    (ids) => ids.length > 0 && ids.every(id => (reveals[id] || []).includes('odds')),
+    [reveals]);
+
+  /** いま選んでいる馬で、券種ごとにいくらになるか（-1 ＝ 頭数は足りているがオッズ未開示） */
   const multByType = useMemo(() => {
     const out = {};
     if (!card) return out;
     Object.values(BET_TYPES).forEach(b => {
       if (picks.length < b.picks) { out[b.key] = 0; return; }
-      out[b.key] = payoutMultiplier(b.key, picks.slice(0, b.picks), card.entries) || 0;
+      const g = picks.slice(0, b.picks);
+      out[b.key] = oddsKnown(g) ? (payoutMultiplier(b.key, g, card.entries) || 0) : -1;
     });
     return out;
-  }, [card, picks]);
+  }, [card, picks, oddsKnown]);
 
   const comboTickets = tickets.filter(t => BET_TYPES[t.type].picks >= 2).length;
-  const expectedMult = picks.length >= requiredPicks && card
-    ? payoutMultiplier(betType, picks.slice(0, requiredPicks), card.entries) : 0;
+  const expectedPicks = picks.slice(0, requiredPicks);
+  const expectedKnown = picks.length >= requiredPicks && oddsKnown(expectedPicks);
+  const expectedMult = expectedKnown && card
+    ? payoutMultiplier(betType, expectedPicks, card.entries) : 0;
   const ticketCount = isSingle ? picks.length : 1;
   const totalCost = (Number(betAmount) || 0) * ticketCount;
 
@@ -896,7 +904,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                         className={`py-1 rounded-lg text-[11px] font-black border transition disabled:opacity-50 leading-tight ${betType === b.key ? 'bg-amber-400 text-black border-amber-300' : 'bg-black/40 text-gray-400 border-white/10'}`}>
                         <span className="block">{b.label}</span>
                         <span className={`block text-[9px] font-mono ${betType === b.key ? 'text-black/70' : m > 0 ? 'text-amber-300' : 'text-gray-600'}`}>
-                          {m > 0 ? `${m}倍` : `${b.picks}頭`}
+                          {m > 0 ? `${m}倍` : m < 0 ? '?.?倍' : `${b.picks}頭`}
                         </span>
                       </button>
                     );
@@ -923,9 +931,11 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
 
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="text-gray-400">選択：<span className="font-mono text-white">{picks.length ? picks.join('-') : '—'}</span></span>
-                  {expectedMult > 0 && (
+                  {expectedMult > 0 ? (
                     <span className="text-gray-400">的中 <span className="text-amber-300 font-black">{fmt(Math.floor((Number(betAmount) || 0) * expectedMult))}G</span>（{expectedMult}倍）</span>
-                  )}
+                  ) : picks.length >= requiredPicks ? (
+                    <span className="text-gray-500 flex items-center gap-1"><Eye size={10} />倍率はオッズを開示すると分かります</span>
+                  ) : null}
                 </div>
                 <GoldButton onClick={buyTicket} disabled={phase !== 'BETTING' || picks.length < requiredPicks}
                   className="w-full py-2.5 flex items-center justify-center gap-2">
@@ -938,7 +948,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                       <div key={i} className="flex items-center gap-2 text-[11px] bg-black/40 rounded-lg px-2 py-1 border border-white/5">
                         <span className="font-black text-amber-300 w-12">{BET_TYPES[t.type].label}</span>
                         <span className="font-mono text-white flex-1">{t.picks.join('-')}</span>
-                        <span className="text-gray-500">{fmt(t.amount)}G ×{t.mult}</span>
+                        <span className="text-gray-500">{fmt(t.amount)}G ×{oddsKnown(t.picks) ? t.mult : '?'}</span>
                       </div>
                     ))}
                   </div>

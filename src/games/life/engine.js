@@ -18,24 +18,35 @@ export const CAREERS = [
 ];
 export const careerOf = (k) => CAREERS.find(c => c.key === k) || null;
 
-/* ---------- マスの種類 ---------- */
+/* ---------- マスの種類 ----------
+   bg / bg2 … タイルの上下グラデーション、edge … 側面（厚み）の色 */
 export const SPACE_STYLE = {
-  START: { bg: '#334155', label: 'スタート', icon: '🏁' },
-  GOAL: { bg: '#b45309', label: 'ゴール', icon: '🏆' },
-  PAY: { bg: '#15803d', label: '給料日', icon: '💰' },
-  PLUS: { bg: '#0e7490', label: '収入', icon: '＋' },
-  MINUS: { bg: '#9f1239', label: '支出', icon: '−' },
-  EVENT: { bg: '#6d28d9', label: 'イベント', icon: '❓' },
-  CAREER: { bg: '#b91c1c', label: '職業選択', icon: '🧭' },
-  MARRY: { bg: '#db2777', label: '結婚', icon: '💒' },
-  BABY: { bg: '#ea580c', label: '出産', icon: '👶' },
-  TAX: { bg: '#4b5563', label: '税金', icon: '🏛️' },
-  GAMBLE: { bg: '#a16207', label: '勝負', icon: '🎲' },
-  STOCK: { bg: '#0f766e', label: '株', icon: '📈' },
-  MOVE: { bg: '#1d4ed8', label: '移動', icon: '➡️' },
-  COLLECT: { bg: '#7c2d12', label: '集金', icon: '🤝' },
-  TREAT: { bg: '#78350f', label: 'おごり', icon: '🍻' },
+  START: { bg: '#64748b', bg2: '#334155', edge: '#1e293b', label: 'スタート', icon: '🏁' },
+  GOAL: { bg: '#fbbf24', bg2: '#b45309', edge: '#78350f', label: 'ゴール', icon: '🏆' },
+  PAY: { bg: '#4ade80', bg2: '#15803d', edge: '#14532d', label: '給料日', icon: '💰' },
+  PLUS: { bg: '#38bdf8', bg2: '#0369a1', edge: '#0c4a6e', label: '収入', icon: '🎁' },
+  MINUS: { bg: '#fb7185', bg2: '#9f1239', edge: '#4c0519', label: '支出', icon: '💸' },
+  EVENT: { bg: '#a78bfa', bg2: '#6d28d9', edge: '#3b0764', label: 'イベント', icon: '❓' },
+  CAREER: { bg: '#f87171', bg2: '#b91c1c', edge: '#450a0a', label: '職業選択', icon: '🧭' },
+  MARRY: { bg: '#f9a8d4', bg2: '#be185d', edge: '#500724', label: '結婚', icon: '💒' },
+  BABY: { bg: '#fdba74', bg2: '#c2410c', edge: '#431407', label: '出産', icon: '👶' },
+  TAX: { bg: '#94a3b8', bg2: '#475569', edge: '#1e293b', label: '税金', icon: '🏛️' },
+  GAMBLE: { bg: '#fcd34d', bg2: '#a16207', edge: '#422006', label: '勝負', icon: '🎲' },
+  STOCK: { bg: '#5eead4', bg2: '#0f766e', edge: '#042f2e', label: '株', icon: '📈' },
+  MOVE: { bg: '#93c5fd', bg2: '#1d4ed8', edge: '#172554', label: '移動', icon: '🌀' },
+  COLLECT: { bg: '#fdba74', bg2: '#9a3412', edge: '#431407', label: '集金', icon: '🤝' },
+  TREAT: { bg: '#fcd34d', bg2: '#92400e', edge: '#451a03', label: 'おごり', icon: '🍻' },
 };
+
+/* ---------- 人生のステージ（盤面の区間） ---------- */
+export const REGIONS = [
+  { from: 0, to: 8, name: '青 春', sub: 'YOUTH', color: '#86efac' },
+  { from: 9, to: 20, name: '就職・結婚', sub: 'CAREER & LOVE', color: '#fda4af' },
+  { from: 21, to: 33, name: '子育て', sub: 'FAMILY', color: '#fdba74' },
+  { from: 34, to: 44, name: '円 熟', sub: 'MATURITY', color: '#93c5fd' },
+  { from: 45, to: 47, name: 'ゴール', sub: 'FINALE', color: '#fcd34d' },
+];
+export const regionOf = (i) => REGIONS.find(r => i >= r.from && i <= r.to) || REGIONS[0];
 
 /** 盤面（48マス） */
 export const BOARD = [
@@ -347,6 +358,21 @@ export function settle(state) {
   st.results = rows;
   st.status = 'DONE';
   return st;
+}
+
+/** マスの説明（カード表示用） */
+export function spaceInfo(i) {
+  const sp = BOARD[i] || BOARD[0];
+  const st = SPACE_STYLE[sp.t] || SPACE_STYLE.EVENT;
+  let detail = sp.text || '';
+  if (!detail) {
+    detail = sp.t === 'PAY' ? '給料をもらった'
+      : sp.t === 'EVENT' ? 'なにが起きる…？'
+        : sp.t === 'STOCK' ? '株を買うチャンス'
+          : sp.t === 'GAMBLE' ? '一か八かの勝負'
+            : st.label;
+  }
+  return { sp, st, title: st.label, detail, region: regionOf(i) };
 }
 
 /** 盤面を蛇行レイアウトに並べるための座標 */

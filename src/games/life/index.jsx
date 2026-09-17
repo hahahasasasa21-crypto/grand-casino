@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { ArrowLeft, Users, Plus, Clock, Trophy, LogOut, RefreshCw, Play } from 'lucide-react';
+import { ArrowLeft, Users, Plus, Clock, Trophy, LogOut, RefreshCw, Play, Sparkles } from 'lucide-react';
 import {
   doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, orderBy, limit, runTransaction,
 } from 'firebase/firestore';
@@ -7,8 +7,10 @@ import { db, appId } from '../../shared/firebase';
 import { Panel, GoldButton, VipBadge, playSfx } from '../../shared/ui';
 import {
   BOARD, GOAL_INDEX, SPACE_STYLE, CAREERS, careerOf, ENTRY_FEES, START_CASH,
-  TURN_MS, KID_VALUE, SPOUSE_VALUE, newPlayer, applySpin, applyChoice, settle, boardLayout, prizeSplit,
-} from './engine';
+  TURN_MS, KID_VALUE, SPOUSE_VALUE, newPlayer, applySpin, applyChoice, settle, prizeSplit,
+  regionOf, spaceInfo,
+} from './engine.js';
+import { LifeBoard, Spinner, EventCard } from './board.jsx';
 
 /* ==========================================================
    オンライン人生ゲーム
@@ -17,57 +19,91 @@ import {
    ========================================================== */
 
 const fmt = (n) => (n || 0).toLocaleString();
-const COLORS = ['#f87171', '#60a5fa', '#34d399', '#fbbf24', '#c084fc', '#22d3ee'];
+const COLORS = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b', '#a855f7', '#06b6d4'];
 const AWAY_MS = 75000;
-const COLS = 8;
+const SPIN_MS = 2450;
 
 const roomsRef = () => collection(db, 'artifacts', appId, 'public', 'data', 'lifeRooms');
 const roomDoc = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'lifeRooms', id);
 const presenceRef = (id) => collection(db, 'artifacts', appId, 'public', 'data', 'lifeRooms', id, 'presence');
 const isFresh = (p) => p && Date.now() - (p.at || 0) < AWAY_MS;
 
-/* ---------- 盤面 ---------- */
-function Board({ players, myIdx }) {
-  const cells = useMemo(() => boardLayout(COLS), []);
+function diffLog(prevLast, cur) {
+  if (!prevLast) return cur.slice(-3);
+  const i = cur.lastIndexOf(prevLast);
+  if (i < 0) return cur.slice(-3);
+  return cur.slice(i + 1);
+}
+
+/* ---------- 小さな部品 ---------- */
+function StageRibbon({ pos }) {
+  const r = regionOf(pos);
+  const pct = Math.round((pos / GOAL_INDEX) * 100);
   return (
-    <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${COLS}, minmax(0,1fr))` }}>
-      {cells.map(({ i, sp, row, col }) => {
-        const st = SPACE_STYLE[sp.t] || SPACE_STYLE.EVENT;
-        const here = players.map((p, k) => ({ p, k })).filter(x => x.p.pos === i);
-        return (
-          <div key={i}
-            style={{ gridRow: row + 1, gridColumn: col + 1, background: st.bg }}
-            className="relative rounded-lg aspect-square flex flex-col items-center justify-center border border-white/15 overflow-hidden">
-            <span className="text-[13px] leading-none">{st.icon}</span>
-            <span className="text-[7px] font-black text-white/70 leading-none mt-0.5">{i + 1}</span>
-            {here.length > 0 && (
-              <div className="absolute inset-x-0 bottom-0 flex flex-wrap justify-center gap-0.5 p-0.5">
-                {here.map(({ p, k }) => (
-                  <span key={k} title={p.name}
-                    className={`block rounded-full border ${k === myIdx ? 'border-white' : 'border-black/50'}`}
-                    style={{ width: 9, height: 9, background: COLORS[k % COLORS.length] }} />
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+    <div className="flex items-center gap-3 px-3 py-2 rounded-2xl bg-black/50 border border-white/10">
+      <span className="text-[10px] font-black tracking-[.25em] shrink-0" style={{ color: r.color }}>{r.sub}</span>
+      <span className="text-sm font-black text-white shrink-0">{r.name}</span>
+      <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden min-w-[60px]">
+        <div className="h-full rounded-full transition-all duration-700"
+          style={{ width: `${pct}%`, background: `linear-gradient(90deg,${r.color},#fde68a)` }} />
+      </div>
+      <span className="font-mono text-[11px] text-gray-400 shrink-0">{pos + 1}/{GOAL_INDEX + 1}</span>
     </div>
   );
 }
 
-/* ---------- ルーレット ---------- */
-function Spinner({ value, spinning }) {
+function TimerRing({ ms, total, color = '#fbbf24' }) {
+  const f = Math.max(0, Math.min(1, ms / total));
+  const R = 15, C = 2 * Math.PI * R;
   return (
-    <div className="relative w-24 h-24 mx-auto">
-      <div className="absolute inset-0 rounded-full border-4 border-amber-400/40"
-        style={{ background: 'conic-gradient(#1e293b 0 36deg,#334155 36deg 72deg,#1e293b 72deg 108deg,#334155 108deg 144deg,#1e293b 144deg 180deg,#334155 180deg 216deg,#1e293b 216deg 252deg,#334155 252deg 288deg,#1e293b 288deg 324deg,#334155 324deg 360deg)' }} />
-      <div className="absolute inset-3 rounded-full bg-black/70 flex items-center justify-center">
-        <span className={`font-mono font-black text-3xl ${spinning ? 'text-gray-500' : 'text-amber-300'}`}>
-          {value || '?'}
+    <div className="relative w-9 h-9 shrink-0">
+      <svg viewBox="0 0 36 36" className="w-9 h-9 -rotate-90">
+        <circle cx="18" cy="18" r={R} fill="none" stroke="rgba(255,255,255,.12)" strokeWidth="3.5" />
+        <circle cx="18" cy="18" r={R} fill="none" stroke={color} strokeWidth="3.5" strokeLinecap="round"
+          strokeDasharray={C} strokeDashoffset={C * (1 - f)} />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center font-mono text-[10px] font-black text-white">
+        {Math.ceil(ms / 1000)}
+      </span>
+    </div>
+  );
+}
+
+function PlayerCard({ p, i, mine, active, away, color }) {
+  const c = careerOf(p.career);
+  const pct = Math.round((p.pos / GOAL_INDEX) * 100);
+  return (
+    <div className={`relative p-2.5 rounded-2xl border overflow-hidden transition
+      ${active ? 'border-emerald-400 bg-emerald-500/10' : mine ? 'border-amber-400/50 bg-amber-400/5' : 'border-white/10 bg-black/40'}
+      ${p.finished ? 'opacity-80' : ''} ${away ? 'grayscale-[.5]' : ''}`}>
+      <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: color }} />
+      <div className="flex items-center gap-1.5 pl-1.5">
+        <svg viewBox="0 0 44 22" className="w-6 h-3 shrink-0">
+          <path d="M2 17 L2 13 Q2 10 5 9.4 L11 8.8 L15 3.4 Q16.6 1.4 19.4 1.4 L26 1.4 Q29.2 1.4 30.8 3.6 L34 8.6 L37 9.8 Q39.4 10.8 39.4 13.6 L39.4 17 Z"
+            fill={color} stroke="rgba(0,0,0,.5)" strokeWidth="1.2" />
+          <circle cx="12" cy="17.6" r="3.4" fill="#18181b" />
+          <circle cx="32" cy="17.6" r="3.4" fill="#18181b" />
+        </svg>
+        <span className="text-[12px] font-black text-white truncate">{p.name}</span>
+        {p.vip && <VipBadge size="xs" />}
+        {p.finished && <span className="text-[9px] font-black px-1 rounded bg-amber-400 text-black">GOAL</span>}
+        {away && <span className="text-[9px] text-gray-500">離席</span>}
+        <span className="ml-auto font-mono text-[12px] font-black text-amber-300">{fmt(p.cash)}</span>
+      </div>
+      <div className="mt-1.5 flex items-center gap-2 pl-1.5">
+        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/10 text-gray-300 font-bold shrink-0">
+          {c ? `${c.icon} ${c.name}` : '職業なし'}
+        </span>
+        <span className="text-[11px] text-gray-400 truncate">
+          {p.spouse ? '💍' : ''}{p.kids > 0 ? `👶×${p.kids}` : ''}{p.stocks > 0 ? ` 📈×${p.stocks}` : ''}
         </span>
       </div>
-      {spinning && <div className="absolute inset-0 rounded-full border-4 border-t-amber-300 border-transparent animate-spin" />}
+      <div className="mt-1.5 flex items-center gap-1.5 pl-1.5">
+        <div className="flex-1 h-1 rounded-full bg-white/10 overflow-hidden">
+          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+        </div>
+        <span className="font-mono text-[9px] text-gray-500 shrink-0">{p.pos + 1}</span>
+      </div>
     </div>
   );
 }
@@ -82,19 +118,23 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
   const [maxSeats, setMaxSeats] = useState(4);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const [spinning, setSpinning] = useState(false);
-  const [spinFace, setSpinFace] = useState(0);
+  const [spinBusy, setSpinBusy] = useState(false);
+  const [wheel, setWheel] = useState(null);
+  const [card, setCard] = useState(null);
   const [claimed, setClaimed] = useState(false);
 
   const mountedRef = useRef(true);
   const roomRef = useRef(null);
   const busyRef = useRef(false);
+  const prevLast = useRef(null);
+  const queued = useRef(null);
+  const cardTimer = useRef(0);
 
   useEffect(() => { roomRef.current = room; }, [room]);
   useEffect(() => {
     mountedRef.current = true;
     const iv = setInterval(() => mountedRef.current && setNow(Date.now()), 300);
-    return () => { mountedRef.current = false; clearInterval(iv); };
+    return () => { mountedRef.current = false; clearInterval(iv); clearTimeout(cardTimer.current); };
   }, []);
 
   const fee = ENTRY_FEES[feeIdx];
@@ -142,6 +182,48 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
   const activeIdx = players.map((p, i) => ({ p, i })).filter(x => isFresh(presenceByName[x.p.name])).map(x => x.i);
   const isReferee = activeIdx.length > 0 && activeIdx[0] === myIdx;
 
+  /* ---------- ほかの人のルーレットを見る ---------- */
+  const lastSpinAt = room?.lastSpin?.at || 0;
+  useEffect(() => {
+    const ls = roomRef.current?.lastSpin;
+    if (!ls || !lastSpinAt) return;
+    if (ls.player === myIdx) return;          // 自分の分はすでに回している
+    setWheel({ value: ls.value, key: `r-${ls.at}` });
+    setSpinBusy(true);
+    const t = setTimeout(() => setSpinBusy(false), SPIN_MS);
+    return () => clearTimeout(t);
+  }, [lastSpinAt, myIdx]);
+
+  /* ---------- できごとカードを仕込む ---------- */
+  useEffect(() => {
+    if (!room) { prevLast.current = null; return; }
+    const cur = room.log || [];
+    if (cur.length === 0) { prevLast.current = null; return; }
+    const last = cur[cur.length - 1];
+    if (last === prevLast.current) return;
+    const added = diffLog(prevLast.current, cur);
+    prevLast.current = last;
+    const ls = room.lastSpin;
+    if (!ls) return;
+    const p = (room.players || [])[ls.player];
+    if (!p) return;
+    const info = spaceInfo(p.pos);
+    queued.current = {
+      key: `${ls.at}-${cur.length}`,
+      icon: info.st.icon, label: info.st.label, title: info.detail,
+      lines: added.slice(-4), color: info.st.bg, spin: ls.value,
+      player: p.name, region: info.region.name,
+    };
+  }, [room]);
+
+  useEffect(() => {
+    if (spinBusy || !queued.current) return;
+    const c = queued.current; queued.current = null;
+    setCard(c);
+    clearTimeout(cardTimer.current);
+    cardTimer.current = setTimeout(() => mountedRef.current && setCard(null), 3500);
+  }, [spinBusy, now]);
+
   /* ---------- 部屋の作成・参加 ---------- */
   const createRoom = async () => {
     if (balance < fee) { showToast(`参加費 ${fmt(fee)} G が必要です。`, 'error'); return; }
@@ -156,7 +238,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
         turn: 0, turnNo: 0, turnDeadline: 0, pending: null, log: [], lastSpin: null,
         results: null, claimed: {}, finishedCount: 0,
       });
-      setRoomId(ref.id); setClaimed(false);
+      setRoomId(ref.id); setClaimed(false); prevLast.current = null;
       playSfx('coin');
       showToast('🎲 部屋を作りました。参加者を待ちましょう。', 'success');
     } catch (e) { showToast('部屋の作成に失敗しました。', 'error'); }
@@ -183,7 +265,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
         tx.update(roomDoc(r.id), { players: ps, pot: (d.pot || 0) + d.fee, updatedAt: Date.now() });
         ok = true;
       });
-      if (ok) { setRoomId(r.id); setClaimed(false); playSfx('coin'); }
+      if (ok) { setRoomId(r.id); setClaimed(false); prevLast.current = null; playSfx('coin'); }
     } catch (e) {
       await updateBalance(r.fee).catch(() => { });
       const m = String(e.message);
@@ -209,7 +291,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
         showToast(`参加費 ${fmt(room.fee)} G を返金しました。`, 'info');
       }
       await deleteDoc(doc(presenceRef(room.id), encodeURIComponent(playerName))).catch(() => { });
-      setRoomId(null); setRoom(null);
+      setRoomId(null); setRoom(null); setCard(null); setWheel(null);
     } finally { setBusy(false); }
   };
 
@@ -229,11 +311,11 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
     busyRef.current = true;
     const value = 1 + Math.floor(Math.random() * 10);
     if (forIdx === myIdx) {
-      setSpinning(true);
-      const iv = setInterval(() => setSpinFace(1 + Math.floor(Math.random() * 10)), 70);
-      await new Promise(res => setTimeout(res, 900));
-      clearInterval(iv);
-      setSpinFace(value); setSpinning(false);
+      setSpinBusy(true);
+      setWheel({ value, key: `me-${Date.now()}` });
+      playSfx('click');
+      await new Promise(res => setTimeout(res, SPIN_MS));
+      if (mountedRef.current) setSpinBusy(false);
     }
     try {
       await runTransaction(db, async (tx) => {
@@ -250,7 +332,6 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
           updatedAt: Date.now(),
         });
       });
-      playSfx('click');
     } catch (e) { /* noop */ }
     finally { busyRef.current = false; }
   }, [myIdx]);
@@ -287,7 +368,6 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
         doSpin(r.turn);
       }
       if (r.status === 'PLAYING' && r.pending && r.turnDeadline && Date.now() > r.turnDeadline + 8000) {
-        // 選択が返ってこないときは安全側の選択で進める
         try {
           await runTransaction(db, async (tx) => {
             const snap = await tx.get(roomDoc(r.id));
@@ -350,13 +430,20 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
           <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
         </div>
 
-        <Panel gold className="p-5 mb-4">
-          <h2 className="text-2xl font-black text-white mb-1 flex items-center gap-2">🎲 オンライン人生ゲーム</h2>
-          <p className="text-xs text-gray-400 leading-relaxed">
-            最大6人で同じ盤を進みます。参加費を全員で出し合い、<b className="text-gray-300">ゴール時の最終資産の順位</b>で山分け。<br />
-            最終資産 ＝ 所持金 ＋ 子ども{fmt(KID_VALUE)}/人 ＋ 結婚{fmt(SPOUSE_VALUE)} ＋ 株（1口 10,000〜35,000）
-          </p>
-        </Panel>
+        <div className="relative rounded-3xl overflow-hidden border border-amber-500/25 mb-4">
+          <div className="absolute inset-0 opacity-45 pointer-events-none">
+            <LifeBoard players={[]} myIdx={-1} turnIdx={-1} colors={COLORS} />
+          </div>
+          <div className="relative p-6 md:p-8" style={{ background: 'linear-gradient(100deg,rgba(6,12,10,.94) 30%,rgba(6,12,10,.55))' }}>
+            <div className="text-[10px] font-black tracking-[.35em] text-amber-300/70 mb-1">ONLINE BOARD GAME</div>
+            <h2 className="text-3xl md:text-4xl font-black text-white mb-2">人生ゲーム</h2>
+            <p className="text-xs md:text-sm text-gray-300 leading-relaxed max-w-md">
+              最大6人で48マスの人生を走ります。参加費を全員で出し合い、
+              <b className="text-amber-200">ゴール時の最終資産の順位</b>で山分け。<br />
+              最終資産 ＝ 所持金 ＋ 子ども{fmt(KID_VALUE)}/人 ＋ 結婚{fmt(SPOUSE_VALUE)} ＋ 株（1口 10,000〜35,000）
+            </p>
+          </div>
+        </div>
 
         {rooms.length > 0 ? (
           <div className="space-y-2 mb-5">
@@ -426,6 +513,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
   const waiting = room.status === 'WAITING';
   const done = room.status === 'DONE';
   const cur = players[room.turn];
+  const curColor = COLORS[room.turn % COLORS.length];
 
   return (
     <div className="p-3 md:p-5 max-w-6xl mx-auto">
@@ -450,9 +538,19 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* 盤面 */}
         <div className="lg:col-span-2 space-y-3">
-          <Panel className="p-3">
-            <Board players={players} myIdx={myIdx} />
-          </Panel>
+          {me && !waiting && <StageRibbon pos={me.pos} />}
+
+          <div className="relative rounded-2xl overflow-hidden border-2 border-amber-900/40 shadow-2xl">
+            <LifeBoard players={players} myIdx={myIdx} turnIdx={room.status === 'PLAYING' ? room.turn : -1}
+              colors={COLORS} focusIdx={me?.pos} />
+            <EventCard data={card} />
+            {room.status === 'PLAYING' && (
+              <div className="absolute top-2 right-2 flex items-center gap-2 px-2.5 py-1.5 rounded-full bg-black/75 border border-white/15 backdrop-blur-sm">
+                <span className="w-2.5 h-2.5 rounded-full" style={{ background: curColor }} />
+                <span className="text-[11px] font-black text-white">{myTurn ? 'あなたの番' : `${cur?.name || '—'} の番`}</span>
+              </div>
+            )}
+          </div>
 
           {/* 操作 */}
           <Panel className="p-4">
@@ -488,28 +586,35 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
                   <div className="flex items-center justify-center gap-2 py-4 text-gray-400"><RefreshCw size={16} className="animate-spin" />集計中…</div>
                 ) : (
                   <div className="space-y-1.5">
-                    {room.results.map(r => (
-                      <div key={r.name} className={`flex items-center gap-3 p-3 rounded-xl border ${r.name === playerName ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40'}`}>
-                        <span className="w-8 text-center text-lg font-black">{['🥇', '🥈', '🥉'][r.rank - 1] || r.rank}</span>
-                        <div className="flex-1 min-w-0">
-                          <div className="font-bold text-white flex items-center gap-1.5">{r.name}{r.vip && <VipBadge size="xs" />}</div>
-                          <div className="text-[10px] text-gray-500">
-                            所持金 {fmt(r.cash)} ／ 子 {r.kids}人 ／ {r.spouse ? '既婚' : '独身'} ／ 株 {r.stocks}口
+                    {room.results.map(r => {
+                      const top = room.results[0]?.assets || 1;
+                      const w = Math.max(6, Math.round((Math.max(0, r.assets) / Math.max(1, top)) * 100));
+                      const ci = players.findIndex(p => p.name === r.name);
+                      return (
+                        <div key={r.name} className={`relative overflow-hidden flex items-center gap-3 p-3 rounded-xl border ${r.name === playerName ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40'}`}>
+                          <div className="absolute left-0 top-0 bottom-0 opacity-15" style={{ width: `${w}%`, background: COLORS[ci % COLORS.length] }} />
+                          <span className="relative w-8 text-center text-lg font-black">{['🥇', '🥈', '🥉'][r.rank - 1] || r.rank}</span>
+                          <div className="relative flex-1 min-w-0">
+                            <div className="font-bold text-white flex items-center gap-1.5">{r.name}{r.vip && <VipBadge size="xs" />}</div>
+                            <div className="text-[10px] text-gray-500">
+                              所持金 {fmt(r.cash)} ／ 子 {r.kids}人 ／ {r.spouse ? '既婚' : '独身'} ／ 株 {r.stocks}口
+                            </div>
+                          </div>
+                          <div className="relative text-right shrink-0">
+                            <div className="font-mono font-black text-amber-300">{fmt(r.assets)}</div>
+                            <div className="text-[10px] text-emerald-400 font-bold">賞金 +{fmt(r.prize)} G</div>
                           </div>
                         </div>
-                        <div className="text-right shrink-0">
-                          <div className="font-mono font-black text-amber-300">{fmt(r.assets)}</div>
-                          <div className="text-[10px] text-emerald-400 font-bold">賞金 +{fmt(r.prize)} G</div>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 <GoldButton onClick={() => { setRoomId(null); setRoom(null); }} className="w-full py-3">ロビーに戻る</GoldButton>
               </div>
             ) : myPending ? (
               <div className="space-y-3">
-                <p className="text-sm font-black text-amber-200 text-center">
+                <p className="text-sm font-black text-amber-200 text-center flex items-center justify-center gap-1.5">
+                  <Sparkles size={15} />
                   {pending.kind === 'CAREER' ? '職業を選んでください' : pending.kind === 'GAMBLE' ? '勝負しますか？' : '株を何口買いますか？'}
                 </p>
                 {pending.kind === 'CAREER' && (
@@ -542,26 +647,35 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
                 )}
               </div>
             ) : (
-              <div className="flex flex-col items-center gap-3">
-                <Spinner value={myTurn ? (spinFace || room.lastSpin?.value) : room.lastSpin?.value} spinning={spinning} />
-                {me?.finished ? (
-                  <p className="text-sm font-bold text-emerald-300">ゴール済みです。ほかの人を待っています…</p>
-                ) : myTurn ? (
-                  <>
-                    <GoldButton onClick={() => doSpin(myIdx)} disabled={busyRef.current || spinning} className="px-10 py-3.5 text-lg">
-                      ルーレットを回す
-                    </GoldButton>
-                    <span className="text-[11px] text-amber-300 font-mono flex items-center gap-1"><Clock size={11} />残り {Math.ceil(timeLeft / 1000)}s</span>
-                  </>
-                ) : (
-                  <p className="text-sm font-bold text-gray-400 flex items-center gap-2">
-                    <RefreshCw size={14} className="animate-spin" />
-                    {cur ? `${cur.name} の番です…` : '待機中…'}（{Math.ceil(timeLeft / 1000)}s）
-                  </p>
-                )}
-                {pending && !myPending && (
-                  <p className="text-[11px] text-gray-500">{players[pending.player]?.name} が選択中…</p>
-                )}
+              <div className="flex flex-col sm:flex-row items-center gap-4">
+                <Spinner value={wheel?.value || 1} spinKey={wheel?.key} size={186} />
+                <div className="flex-1 w-full text-center sm:text-left space-y-2">
+                  {me?.finished ? (
+                    <p className="text-sm font-bold text-emerald-300">🏁 ゴール済みです。ほかの人を待っています…</p>
+                  ) : myTurn ? (
+                    <>
+                      <p className="text-lg font-black text-white">あなたの番です</p>
+                      <GoldButton onClick={() => doSpin(myIdx)} disabled={busyRef.current || spinBusy}
+                        className="w-full sm:w-auto px-10 py-3.5 text-lg">
+                        {spinBusy ? '回転中…' : 'ルーレットを回す'}
+                      </GoldButton>
+                      <div className="flex items-center justify-center sm:justify-start gap-2 text-[11px] text-amber-300 font-mono">
+                        <TimerRing ms={timeLeft} total={TURN_MS} /> 残り時間
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-base font-black text-white flex items-center justify-center sm:justify-start gap-2">
+                        <span className="w-3 h-3 rounded-full" style={{ background: curColor }} />
+                        {cur ? `${cur.name} の番` : '待機中'}
+                      </p>
+                      <div className="flex items-center justify-center sm:justify-start gap-2 text-[11px] text-gray-400">
+                        <TimerRing ms={timeLeft} total={TURN_MS} color={curColor} />
+                        {spinBusy ? 'ルーレットが回っています…' : pending && !myPending ? `${players[pending.player]?.name} が選択中…` : '手番を待っています'}
+                      </div>
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </Panel>
@@ -569,10 +683,12 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
           {/* ログ */}
           {(room.log || []).length > 0 && (
             <Panel className="p-3">
-              <div className="text-[10px] font-black tracking-widest text-amber-200/60 mb-1.5">ログ</div>
+              <div className="text-[10px] font-black tracking-widest text-amber-200/60 mb-1.5 flex items-center gap-1.5">
+                <Clock size={11} /> ログ
+              </div>
               <div className="max-h-40 overflow-y-auto space-y-0.5">
                 {[...(room.log || [])].reverse().map((l, i) => (
-                  <div key={i} className="text-[11px] text-gray-400">・{l}</div>
+                  <div key={i} className={`text-[11px] ${i === 0 ? 'text-amber-200 font-bold' : 'text-gray-400'}`}>・{l}</div>
                 ))}
               </div>
             </Panel>
@@ -582,30 +698,16 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
         {/* プレイヤー */}
         <div className="space-y-3">
           <Panel className="p-3">
-            <div className="text-[10px] font-black tracking-widest text-amber-200/60 mb-2">プレイヤー</div>
+            <div className="text-[10px] font-black tracking-widest text-amber-200/60 mb-2 flex items-center gap-1.5">
+              <Users size={11} /> プレイヤー
+            </div>
             <div className="space-y-1.5">
-              {players.map((p, i) => {
-                const c = careerOf(p.career);
-                const away = !isFresh(presenceByName[p.name]);
-                return (
-                  <div key={p.name}
-                    className={`p-2 rounded-xl border ${room.turn === i && room.status === 'PLAYING' ? 'border-emerald-400 bg-emerald-500/10' : 'border-white/10 bg-black/40'} ${p.finished ? 'opacity-70' : ''}`}>
-                    <div className="flex items-center gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: COLORS[i % COLORS.length] }} />
-                      <span className="text-[12px] font-black text-white truncate">{p.name}</span>
-                      {p.vip && <VipBadge size="xs" />}
-                      {p.finished && <span className="text-[9px] font-black px-1 rounded bg-amber-400 text-black">GOAL</span>}
-                      {away && <span className="text-[9px] text-gray-600">離席</span>}
-                      <span className="ml-auto font-mono text-[12px] font-black text-amber-300">{fmt(p.cash)}</span>
-                    </div>
-                    <div className="text-[10px] text-gray-500 flex flex-wrap gap-x-2">
-                      <span>{c ? `${c.icon}${c.name}` : '職業なし'}</span>
-                      <span>{p.spouse ? '💍' : ''}{p.kids > 0 ? `👶×${p.kids}` : ''}{p.stocks > 0 ? ` 📈×${p.stocks}` : ''}</span>
-                      <span className="ml-auto">{p.pos + 1}/{GOAL_INDEX + 1}マス</span>
-                    </div>
-                  </div>
-                );
-              })}
+              {players.map((p, i) => (
+                <PlayerCard key={p.name} p={p} i={i} mine={i === myIdx}
+                  active={room.turn === i && room.status === 'PLAYING'}
+                  away={!isFresh(presenceByName[p.name])}
+                  color={COLORS[i % COLORS.length]} />
+              ))}
             </div>
           </Panel>
 
@@ -620,6 +722,19 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
               ))}
             </div>
             <p className="text-[10px] text-gray-600 mt-2">所持金は {fmt(START_CASH)} からスタート。マスのイベントで増減します。</p>
+          </Panel>
+
+          <Panel className="p-3">
+            <div className="text-[10px] font-black tracking-widest text-amber-200/60 mb-2">マスの種類</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-1">
+              {Object.entries(SPACE_STYLE).filter(([k]) => k !== 'START').map(([k, s]) => (
+                <div key={k} className="flex items-center gap-1.5 min-w-0">
+                  <span className="w-4 h-4 rounded-md shrink-0 border border-white/25"
+                    style={{ background: `linear-gradient(180deg,${s.bg},${s.bg2})` }} />
+                  <span className="text-[10px] text-gray-400 truncate">{s.icon} {s.label}</span>
+                </div>
+              ))}
+            </div>
           </Panel>
         </div>
       </div>

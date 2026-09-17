@@ -1,1 +1,1 @@
-export { default } from './horse/HorseRacing';
+export { default } from './horse/HorseRacing.jsx';

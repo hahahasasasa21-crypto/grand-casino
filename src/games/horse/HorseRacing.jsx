@@ -6,7 +6,7 @@ import { Panel, GoldButton, playSfx } from '../../shared/ui';
 import {
   buildRaceCard, attachOddsAsync, createSim, SIM_DT,
   BET_TYPES, payoutMultiplier, checkHit, RUNNING_STYLES, TURF_COLOR,
-  REVEAL_FIELDS, REVEAL_LABEL, revealCost, commentaryFor, phaseOf, PHASE_LABEL,
+  REVEAL_FIELDS, REVEAL_LABEL, MAX_REVEAL_PER_HORSE, revealCost, commentaryFor, phaseOf, PHASE_LABEL,
 } from './engine';
 import { SKILL_BY_ID, SKILL_CATS } from './skills';
 import { ITEMS } from '../../shared/vip';
@@ -109,10 +109,15 @@ function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canR
           <div className={`font-mono font-black text-sm ${has('odds') ? 'text-amber-300' : 'text-gray-600'}`}>
             {has('odds') ? e.odds.toFixed(1) : '??.?'}
           </div>
+          <div className="flex justify-end gap-0.5 mt-0.5" title={`開示は1頭 ${MAX_REVEAL_PER_HORSE} 項目まで`}>
+            {Array.from({ length: MAX_REVEAL_PER_HORSE }).map((_, k) => (
+              <span key={k} className={`w-2 h-2 rounded-full border ${revealed.length > k ? 'bg-sky-400 border-sky-300' : 'border-white/25'}`} />
+            ))}
+          </div>
           {has('odds') && <div className="text-[9px] text-gray-500">{e.popularity}人気</div>}
           <button onClick={() => onReveal(e.id)} disabled={!canReveal}
             className="mt-1 text-[9px] font-black px-2 py-1 rounded-lg bg-sky-600/80 hover:bg-sky-500 text-white disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
-            <Eye size={10} />{canReveal ? fmt(cost) : '全開示'}
+            <Eye size={10} />{canReveal ? fmt(cost) : revealed.length >= REVEAL_FIELDS.length ? '全開示' : '上限'}
           </button>
           {scopeMode && (
             <button onClick={() => onPick(e.id)}
@@ -205,6 +210,10 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
   const doReveal = async (id) => {
     if (!card) return;
     const cur = reveals[id] || [];
+    if (cur.length >= MAX_REVEAL_PER_HORSE) {
+      showToast(`情報開示は1頭につき ${MAX_REVEAL_PER_HORSE}項目 までです。（全知の望遠鏡だけが上限を無視できます）`, 'warning');
+      return;
+    }
     const left = REVEAL_FIELDS.filter(f => !cur.includes(f));
     if (!left.length) { showToast('この馬の情報はすべて開示済みです。', 'info'); return; }
     if (balance < unitCost) { showToast('コインが足りません。', 'error'); return; }
@@ -858,6 +867,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                 </div>
                 <p className="text-[10px] text-gray-500 leading-snug">
                   馬の「<b className="text-gray-300">スピード / 体力 / オッズ / スキル</b>」のうち、まだ隠れている1項目が<b className="text-gray-300">ランダムに</b>判明します。<br />
+                  <b className="text-sky-300">1頭につき {MAX_REVEAL_PER_HORSE}項目 まで</b>（🔭 全知の望遠鏡だけが上限を無視できます）。<br />
                   単価 = 200G ＋ 購入予定額 <b className="text-gray-300">{fmt(betAmount)}G</b> の40％。開示のたびに ×1.25（現在{revealsUsed}回）。
                 </p>
               </Panel>
@@ -970,7 +980,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                         <EntryRow key={e.id} e={e} revealed={rev}
                           picked={idx >= 0} pickIndex={idx} ordered={BET_TYPES[betType].ordered} scopeMode={scopeMode}
                           onPick={togglePick} onReveal={doReveal}
-                          cost={unitCost} canReveal={phase === 'BETTING' && rev.length < REVEAL_FIELDS.length && balance >= unitCost}
+                          cost={unitCost} canReveal={phase === 'BETTING' && rev.length < MAX_REVEAL_PER_HORSE && balance >= unitCost}
                           disabled={phase !== 'BETTING'} />
                       );
                     })}

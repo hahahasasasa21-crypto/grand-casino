@@ -607,6 +607,8 @@ export function checkHit(type, picks, orderIds) {
    「賭け金が高いほど1回の開示単価が高くなる」
    ========================================================== */
 export const REVEAL_FIELDS = ['speed', 'stamina', 'odds', 'skills'];
+/** 1頭につきコインで開示できるのはこの数まで（全知の望遠鏡だけが例外） */
+export const MAX_REVEAL_PER_HORSE = 2;
 export const REVEAL_LABEL = { speed: 'スピード', stamina: '体力', odds: 'オッズ', skills: 'スキル' };
 
 export function revealCost(betAmount, revealsUsed) {

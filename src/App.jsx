@@ -9,12 +9,14 @@ import {
   loanState, effectiveVip, goldPrice, goldSellPrice, GOLD_BASE, ITEMS,
 } from './shared/vip';
 import Shop from './views/Shop';
+import WorkView from './games/work/index.jsx';
+import { jobLabel, salaryOf, careerOf as workCareerOf, rankOf as workRankOf, PAY_INTERVAL, PAY_MAX_PERIODS } from './games/work/jobs.js';
 import Blackjack from './games/Blackjack';
-import LifeGame from './games/life';
+import LifeGame from './games/life/index.jsx';
 import SlotMachine from './games/SlotMachine';
 import RedBlackView from './games/RedBlack';
-import PokerView from './games/Poker';
-import HorseRacing from './games/HorseRacing';
+import PokerView from './games/Poker.jsx';
+import HorseRacing from './games/HorseRacing.jsx';
 /* ==========================================================
    競馬イベント：解放
    ========================================================== */
@@ -23,28 +25,6 @@ const HORSE_RACING_EVENT_ACTIVE = true;
 /* ==========================================================
    英単語定数
    ========================================================== */
-const WORD_LEVELS = [
-  { words: [
-    { en: 'apple', ja: 'りんご' }, { en: 'book', ja: '本' }, { en: 'cat', ja: 'ねこ' },
-    { en: 'dog', ja: 'いぬ' }, { en: 'egg', ja: 'たまご' }, { en: 'fish', ja: 'さかな' },
-    { en: 'gold', ja: 'きん' }, { en: 'hat', ja: 'ぼうし' }, { en: 'ice', ja: 'こおり' },
-    { en: 'job', ja: 'しごと' }, { en: 'key', ja: 'かぎ' }, { en: 'lion', ja: 'ライオン' },
-  ], reward: 50, label: '初級', color: 'text-green-400', bg: 'bg-green-500/10 border-green-500/30' },
-  { words: [
-    { en: 'mountain', ja: 'やま' }, { en: 'river', ja: 'かわ' }, { en: 'school', ja: 'がっこう' },
-    { en: 'doctor', ja: 'いしゃ' }, { en: 'flower', ja: 'はな' }, { en: 'garden', ja: 'にわ' },
-    { en: 'hospital', ja: 'びょういん' }, { en: 'island', ja: 'しま' }, { en: 'journey', ja: 'たび' },
-    { en: 'kitchen', ja: 'だいどころ' }, { en: 'library', ja: 'としょかん' }, { en: 'mirror', ja: 'かがみ' },
-  ], reward: 150, label: '中級', color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/30' },
-  { words: [
-    { en: 'democracy', ja: 'みんしゅしゅぎ' }, { en: 'philosophy', ja: 'てつがく' },
-    { en: 'algorithm', ja: 'アルゴリズム' }, { en: 'archaeology', ja: 'こうこがく' },
-    { en: 'bureaucracy', ja: 'かんりょうせい' }, { en: 'catastrophe', ja: 'だいさんじ' },
-    { en: 'entrepreneur', ja: 'きぎょうか' }, { en: 'fluorescent', ja: 'けいこうとう' },
-    { en: 'guillotine', ja: 'ギロチン' }, { en: 'hippopotamus', ja: 'カバ' },
-    { en: 'infrastructure', ja: 'インフラ' }, { en: 'jurisdiction', ja: 'かんかつ' },
-  ], reward: 400, label: '上級', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30' },
-];
 
 /* ==========================================================
    採掘定数
@@ -93,6 +73,11 @@ export default function App() {
   const [loanStartAt, setLoanStartAt] = useState(0);
   const [items, setItems] = useState({});
   const [gold, setGold] = useState(0);
+  const [job, setJob] = useState(null);
+  const [licenses, setLicenses] = useState([]);
+  const [jobRecord, setJobRecord] = useState({});
+  const [workExp, setWorkExp] = useState(0);
+  const [workCool, setWorkCool] = useState({});
   const [marketProfit, setMarketProfit] = useState(0);
   const [topPlayer, setTopPlayer] = useState('');
   const [newsDraft, setNewsDraft] = useState('');
@@ -155,11 +140,17 @@ export default function App() {
         setLoanStartAt(d.loanStartAt || 0);
         setItems(d.items || {});
         setGold(d.gold || 0);
+        setJob(d.job || null);
+        setLicenses(d.licenses || []);
+        setJobRecord(d.jobRecord || {});
+        setWorkExp(d.workExp || 0);
+        setWorkCool(d.workCool || {});
         maintainLoanFlag(d, docRef);
         maintainSubscription(d, docRef);
         setTransferHistory(d.transferHistory || []);
         calcOfflineInterest(d, docRef);
         calcLoanInterest(d, docRef);
+        calcSalary(d, docRef);
       } else {
         const now = Date.now();
         setDoc(docRef, {
@@ -168,6 +159,7 @@ export default function App() {
           createdAt: now, name: playerName, password: passwordRef.current,
           vip: false, vipSince: 0, lastVipNewsAt: 0, vipSubUntil: 0,
           loanStartAt: 0, items: {}, gold: 0,
+          job: null, licenses: [], jobRecord: {}, workExp: 0, workCool: {},
           transferHistory: []
         });
       }
@@ -202,6 +194,14 @@ export default function App() {
     return () => clearInterval(timer);
   }, [user, playerName, bankBalance, playerRef, showToast]);
 
+  // 給料日の見張り（アプリを開いたままでも支給されるように）
+  useEffect(() => {
+    if (!user || !playerName || !job) return;
+    const iv = setInterval(() => calcSalary({ job }, playerRef(playerName)), 30000);
+    return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, playerName, job, playerRef]);
+
   // ローン利息（15分ごと）
   useEffect(() => {
     if (!user || !playerName || loanBalance <= 0) return;
@@ -222,27 +222,42 @@ export default function App() {
     const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
     const unsub = onSnapshot(collRef, snap => {
       const players = [];
+      let deposits = 0, loans = 0, accounts = 0;
       snap.forEach(d => {
         const data = d.data();
         let name = data.name;
         if (!name) { try { name = decodeURIComponent(d.id); } catch (e) { name = d.id; } }
         const total = (data.balance || 0) + (data.bankBalance || 0) - (data.loanBalance || 0) + (data.gold || 0) * GOLD_BASE;
+        deposits += data.bankBalance || 0;
+        loans += data.loanBalance || 0;
+        accounts += 1;
         players.push({
           name,
           balance: data.balance || 0,
           bankBalance: data.bankBalance || 0,
           loanBalance: data.loanBalance || 0,
+          gold: data.gold || 0,
+          job: data.job || null,
           creditScore: data.creditScore ?? 100,
-          vip: data.vip === true,
+          vip: data.vip === true || (data.vipSubUntil || 0) > Date.now(),
           createdAt: data.createdAt || 0,
           profit: total - 10000,
           total,
         });
       });
       players.sort((a, b) => b.total - a.total);
-      setRankingData(players.slice(0, 20));
       setMarketProfit(players.reduce((a, p) => a + p.profit, 0));
       setTopPlayer(players.length ? players[0].name : '');
+      // YUTAPON-BANK 自身も番付に参加する（預かり資産＋貸出残高＝銀行の総資産）
+      const bankRow = {
+        name: 'YUTAPON-BANK', isBank: true,
+        balance: 0, bankBalance: deposits, loanBalance: 0, gold: 0, job: null,
+        creditScore: 999, vip: true, createdAt: 0,
+        deposits, loans, accounts,
+        profit: 0, total: deposits + loans,
+      };
+      const merged = [...players.slice(0, 20), bankRow].sort((a, b) => b.total - a.total);
+      setRankingData(merged);
     });
     return () => unsub();
   }, [user, view]);
@@ -276,6 +291,35 @@ export default function App() {
     } catch (e) { /* noop */ }
     finally { setTimeout(() => { subBusyRef.current = false; }, 3000); }
   };
+
+  /** 給料日（不在中のぶんもまとめて支給。貯まりすぎないよう上限あり） */
+  const salaryBusyRef = useRef(false);
+  const calcSalary = async (data, docRef) => {
+    const j = data.job;
+    if (!j || !workCareerOf(j.key) || salaryBusyRef.current) return;
+    const now = Date.now();
+    const last = j.lastPayAt || j.hiredAt || now;
+    const periods = Math.min(PAY_MAX_PERIODS, Math.floor((now - last) / PAY_INTERVAL));
+    if (periods <= 0) return;
+    const amount = salaryOf(j) * periods;
+    if (amount <= 0) return;
+    salaryBusyRef.current = true;
+    try {
+      const nj = { ...j, lastPayAt: last + periods * PAY_INTERVAL, exp: (j.exp || 0) + 5 * periods };
+      await updateDoc(docRef, {
+        balance: increment(amount), job: nj,
+        workExp: increment(5 * periods),
+        [`jobRecord.${j.key}`]: { rank: nj.rank || 0, exp: nj.exp || 0 },
+      });
+      showToast(`💼 給料日！ ${workCareerOf(j.key).name}・${workRankOf(j.rank).name} +${amount.toLocaleString()} G（${periods}回分）`, 'success');
+    } catch (e) { /* noop */ }
+    finally { setTimeout(() => { salaryBusyRef.current = false; }, 2000); }
+  };
+
+  const saveWork = useCallback(async (patch) => {
+    if (!playerName) return;
+    await updateDoc(playerRef(playerName), patch);
+  }, [playerName, playerRef]);
 
   const calcOfflineInterest = async (data, docRef) => {
     const now = Date.now();
@@ -457,10 +501,20 @@ export default function App() {
   const vipNewsLeft = useMemo(() => (lastVipNewsAt ? Math.max(0, VIP_NEWS_COOLDOWN - (Date.now() - lastVipNewsAt)) : 0), [lastVipNewsAt, newsTick]);
   const postVipNews = async () => {
     const msg = newsDraft.trim();
-    if (!vip) return;
+    // 定期購入のVIPでも書けるよう、買い切りフラグではなく実効VIPで判定する
+    if (!vipActive) {
+      showToast(delinq.delinquent
+        ? 'ローン延滞中はニュースに投稿できません。'
+        : 'VIP会員になるとニュースに投稿できます。', 'error');
+      return;
+    }
     if (!msg) { showToast('メッセージを入力してください。', 'error'); return; }
     if (msg.length > VIP_NEWS_MAX_LEN) { showToast(`${VIP_NEWS_MAX_LEN}文字までです。`, 'error'); return; }
-    if (newsCooldownLeft(lastVipNewsAt) > 0) { showToast('次の投稿までもう少しお待ちください。', 'warning'); return; }
+    const cooldown = lastVipNewsAt ? Math.max(0, VIP_NEWS_COOLDOWN - (Date.now() - lastVipNewsAt)) : 0;
+    if (cooldown > 0) {
+      showToast(`次の投稿まで あと ${Math.ceil(cooldown / 1000)} 秒です。`, 'warning');
+      return;
+    }
     try {
       await postNews(db, appId, `📣 ${playerName}：${msg}`, 'vip');
       await updateDoc(playerRef(playerName), { lastVipNewsAt: Date.now() });
@@ -721,9 +775,11 @@ export default function App() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <button onClick={() => setView('LABOR')} className="group relative overflow-hidden bg-gradient-to-br from-sky-900/70 to-cyan-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-sky-400/40 transition-all transform hover:-translate-y-1 text-left">
                       <div className="absolute -top-4 -right-4 text-sky-400/10 group-hover:text-sky-300/20 transition"><BookOpen size={110} /></div>
-                      <span className="bg-black/40 text-sky-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-sky-300/20">Study</span>
-                      <h2 className="text-xl font-extrabold text-white mb-1">英単語バイト</h2>
-                      <p className="text-gray-400 text-sm">初級50G〜上級400G・参加費無料</p>
+                      <span className="bg-black/40 text-sky-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-sky-300/20">Works</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1">YUTAPON WORKS</h2>
+                      <p className="text-gray-400 text-sm">
+                        {job ? `${jobLabel(job)}・給料 ${salaryOf(job).toLocaleString()}G` : 'アルバイト14種・資格16種・就職14職'}
+                      </p>
                     </button>
                     <button onClick={() => setView('MINING')} className="group relative overflow-hidden bg-gradient-to-br from-amber-900/70 to-yellow-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-amber-400/40 transition-all transform hover:-translate-y-1 text-left">
                       <div className="absolute -top-4 -right-4 text-amber-400/10 group-hover:text-amber-300/20 transition"><Pickaxe size={110} /></div>
@@ -737,7 +793,7 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {[
                     { id: 'SHOP', label: 'ショップ', sub: delinq.delinquent ? '延滞中・利用停止' : vipActive ? 'VIP会員です' : '道具・金・VIP券', icon: <ShoppingBag size={20} />, tone: delinq.delinquent ? 'text-red-400' : 'text-amber-300' },
-                    { id: 'BANK', label: 'ユタポンバンク', sub: '預金・借入・信用度', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
+                    { id: 'BANK', label: 'YUTAPON-BANK', sub: '預金・借入・信用度', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
                     { id: 'TRANSFER', label: 'オンライン送金', sub: '他プレイヤーへ送金', icon: <Send size={20} />, tone: 'text-sky-300' },
                     { id: 'INVEST', label: '人物株投資', sub: '他プレイヤーに投資', icon: <TrendingUp size={20} />, tone: 'text-cyan-300' },
                     { id: 'RANKING', label: '長者番付', sub: 'トップ10', icon: <Trophy size={20} />, tone: 'text-amber-300' },
@@ -849,7 +905,14 @@ export default function App() {
         {view === 'REDBLACK' && <ErrorBoundary onReset={() => setView('MENU')}><RedBlackView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'POKER' && <ErrorBoundary onReset={() => setView('MENU')}><PokerView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
         {view === 'RACE' && <ErrorBoundary onReset={() => setView('MENU')}><HorseRacing balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} items={items} useItem={useItem} /></ErrorBoundary>}
-        {view === 'LABOR' && <ErrorBoundary onReset={() => setView('MENU')}><LaborView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
+        {view === 'LABOR' && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <WorkView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
+              showToast={showToast} playerName={playerName} emitNews={emitNews}
+              job={job} licenses={licenses} jobRecord={jobRecord} workExp={workExp} workCool={workCool}
+              saveWork={saveWork} />
+          </ErrorBoundary>
+        )}
         {view === 'MINING' && <ErrorBoundary onReset={() => setView('MENU')}><MiningView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'LIFE' && <ErrorBoundary onReset={() => setView('MENU')}><LifeGame balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
         {view === 'SHOP' && <ErrorBoundary onReset={() => setView('MENU')}><Shop balance={balance} vip={vip} vipSince={vipSince} vipSubUntil={vipSubUntil} vipActive={vipActive} delinquent={delinq.delinquent} delinquentInfo={delinq} items={items} gold={gold} goldPx={goldPx} marketProfit={marketProfit} onBuyVip={buyVip} onSubscribe={subscribeVip} onCancelSub={cancelVipSub} onBuyItem={buyItem} onTradeGold={tradeGold} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
@@ -862,7 +925,7 @@ export default function App() {
           <div className="p-6 md:p-12 max-w-3xl mx-auto">
             <button onClick={() => setView('MENU')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
             <Panel gold className="p-6 md:p-8">
-              <SectionTitle icon={<Landmark size={28} />} title="GRAND BANK" sub="預金: 30分 +0.1% ／ ローン: 15分 +0.3%" />
+              <SectionTitle icon={<Landmark size={28} />} title="YUTAPON-BANK" sub="預金: 30分 +0.1% ／ ローン: 15分 +0.3%" />
               <div className="bg-black/40 p-5 rounded-2xl border border-white/10 mb-4">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-sm font-bold text-gray-400">信用スコア</span>
@@ -966,11 +1029,11 @@ export default function App() {
           <div className="p-6 md:p-12 max-w-3xl mx-auto">
             <button onClick={() => setView('MENU')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
             <Panel gold className="p-6 md:p-8">
-              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub={vipActive ? '純資産ランキング（VIP：損益の詳細つき）' : '純資産ランキング（所持金＋預金−ローン＋金）'} />
+              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub="純資産ランキング（所持金＋預金−ローン＋金）・YUTAPON-BANK も参戦" />
               {!vipActive && (
                 <button onClick={() => setView('SHOP')} className="w-full mb-4 p-3 rounded-xl bg-amber-400/5 border border-amber-400/20 text-left hover:bg-amber-400/10 transition">
                   <span className="text-[11px] text-amber-200/80 font-bold flex items-center gap-1.5">
-                    <Crown size={13} /> VIP会員になると、ローン残高・信用スコア・通算収支・参加日まで見られます
+                    <Crown size={13} /> VIP会員になると、信用スコア・通算収支・参加日まで見られます
                   </span>
                 </button>
               )}
@@ -978,8 +1041,33 @@ export default function App() {
                 {rankingData.length === 0 ? (
                   <p className="text-center text-gray-500 py-12">プレイヤーがまだ存在しません。</p>
                 ) : rankingData.map((player, index) => {
-                  const isSelf = player.name === playerName;
                   const rankBadge = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}`;
+
+                  if (player.isBank) {
+                    return (
+                      <div key="yutapon-bank" className="flex items-center justify-between p-4 rounded-2xl border border-emerald-400/45 bg-gradient-to-r from-emerald-900/45 via-emerald-950/40 to-black/40">
+                        <div className="flex items-center gap-4 min-w-0">
+                          <span className="w-8 text-center text-xl font-bold shrink-0">{rankBadge}</span>
+                          <div className="min-w-0">
+                            <span className="font-black text-lg flex items-center gap-1.5 text-emerald-300 truncate">
+                              <Landmark size={17} className="shrink-0" /> YUTAPON-BANK
+                              <span className="text-[10px] bg-emerald-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">BANK</span>
+                            </span>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-400 font-semibold">
+                              <span>預かり資産:{player.deposits.toLocaleString()}G</span>
+                              <span className="text-amber-300">貸出残高:{player.loans.toLocaleString()}G</span>
+                              <span>口座数:{player.accounts}</span>
+                              <span className="text-gray-600">みんなの預金と借金が銀行の資産です</span>
+                            </div>
+                          </div>
+                        </div>
+                        <span className="font-mono text-lg md:text-xl font-black text-emerald-300 shrink-0">{player.total.toLocaleString()} G</span>
+                      </div>
+                    );
+                  }
+
+                  const isSelf = player.name === playerName;
+                  const title = jobLabel(player.job);
                   return (
                     <div key={player.name + index} className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${isSelf ? 'bg-amber-500/10 border-amber-500' : 'bg-black/40 border-white/10'}`}>
                       <div className="flex items-center gap-4 min-w-0">
@@ -987,27 +1075,24 @@ export default function App() {
                         <div className="min-w-0">
                           <span className={`font-bold text-lg flex items-center gap-1.5 truncate ${isSelf ? 'text-amber-300' : player.vip ? 'text-amber-200' : 'text-white'}`}>
                             {player.name}
-                            {index === 0 && <TopBadge size="xs" />}
+                            {player.name === topPlayer && <TopBadge size="xs" />}
                             {player.vip && <VipBadge size="xs" />}
                             {isSelf && <span className="text-[10px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-black">YOU</span>}
                           </span>
-                          {vipActive ? (
-                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
-                              <span>手元:{player.balance.toLocaleString()}G</span>
-                              <span>銀行:{player.bankBalance.toLocaleString()}G</span>
-                              <span className={player.loanBalance > 0 ? 'text-red-400' : ''}>ローン:{player.loanBalance.toLocaleString()}G</span>
-                              <span className={getCreditColor(player.creditScore)}>信用 {getCreditLabel(player.creditScore)}({Math.floor(player.creditScore)})</span>
+                          {title && <div className="text-[11px] font-bold text-sky-300/90 truncate">{title}</div>}
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
+                            <span>手元:{player.balance.toLocaleString()}G</span>
+                            <span className="text-emerald-400/90">銀行:{player.bankBalance.toLocaleString()}G</span>
+                            <span className={player.loanBalance > 0 ? 'text-red-400' : ''}>ローン:{player.loanBalance.toLocaleString()}G</span>
+                            <span className={player.gold > 0 ? 'text-amber-400' : ''}>金:{player.gold.toLocaleString()}g</span>
+                            {vipActive && <span className={getCreditColor(player.creditScore)}>信用 {getCreditLabel(player.creditScore)}({Math.floor(player.creditScore)})</span>}
+                            {vipActive && (
                               <span className={player.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}>
                                 通算 {player.profit >= 0 ? '+' : ''}{player.profit.toLocaleString()}G
                               </span>
-                              {player.createdAt > 0 && <span className="text-gray-600">{new Date(player.createdAt).toLocaleDateString('ja-JP')}〜</span>}
-                            </div>
-                          ) : (
-                            <div className="flex flex-wrap items-center gap-x-3 text-[11px] text-gray-500 font-semibold">
-                              <span>手元:{player.balance.toLocaleString()}G</span>
-                              <span>銀行:{player.bankBalance.toLocaleString()}G</span>
-                            </div>
-                          )}
+                            )}
+                            {vipActive && player.createdAt > 0 && <span className="text-gray-600">{new Date(player.createdAt).toLocaleDateString('ja-JP')}〜</span>}
+                          </div>
                         </div>
                       </div>
                       <span className="font-mono text-lg md:text-xl font-black text-amber-300 shrink-0">{player.total.toLocaleString()} G</span>
@@ -1356,144 +1441,6 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
   );
 }
 
-/* ==========================================================
-   英単語バイト
-   ========================================================== */
-function LaborView({ balance, updateBalance, onBack, showToast }) {
-  const QUIZ_COUNT = 5;
-  const [phase, setPhase] = useState('SELECT');
-  const [level, setLevel] = useState(0);
-  const [questions, setQuestions] = useState([]);
-  const [currentQ, setCurrentQ] = useState(0);
-  const [score, setScore] = useState(0);
-  const [input, setInput] = useState('');
-  const [feedback, setFeedback] = useState(null);
-  const [timeLeft, setTimeLeft] = useState(10);
-  const [earned, setEarned] = useState(0);
-  const inputRef = useRef(null);
-  const scoreRef = useRef(0);
-  const lockRef = useRef(false);
-
-  const startQuiz = (lvl) => {
-    setLevel(lvl);
-    const pool = [...WORD_LEVELS[lvl].words].sort(() => Math.random() - 0.5).slice(0, QUIZ_COUNT);
-    setQuestions(pool); setCurrentQ(0); setScore(0); scoreRef.current = 0;
-    setInput(''); setFeedback(null); setTimeLeft(10); lockRef.current = false;
-    setPhase('QUIZ');
-  };
-
-  const finishQuiz = useCallback(async (finalScore, lvl) => {
-    const base = WORD_LEVELS[lvl].reward;
-    const reward = Math.floor(base * (finalScore / QUIZ_COUNT) * (finalScore === QUIZ_COUNT ? 1.5 : 1));
-    setEarned(reward);
-    if (reward > 0) { try { await updateBalance(reward); } catch (e) { /* noop */ } }
-    setPhase('RESULT');
-  }, [updateBalance]);
-
-  const handleAnswer = useCallback((ans) => {
-    if (lockRef.current) return;
-    lockRef.current = true;
-    const correct = (questions[currentQ]?.en || '').toLowerCase();
-    const ok = ans.trim().toLowerCase() === correct && correct !== '';
-    setFeedback(ok ? 'correct' : 'wrong');
-    if (ok) { scoreRef.current += 1; setScore(scoreRef.current); }
-    setTimeout(() => {
-      setFeedback(null); setInput(''); setTimeLeft(10);
-      if (currentQ + 1 >= QUIZ_COUNT) finishQuiz(scoreRef.current, level);
-      else { setCurrentQ(q => q + 1); lockRef.current = false; }
-    }, 850);
-  }, [questions, currentQ, level, finishQuiz]);
-
-  // タイマー（状態更新関数の中で副作用を起こさない実装に修正）
-  useEffect(() => {
-    if (phase !== 'QUIZ' || feedback) return;
-    if (timeLeft <= 0) { handleAnswer(''); return; }
-    const t = setTimeout(() => setTimeLeft(v => v - 1), 1000);
-    return () => clearTimeout(t);
-  }, [phase, timeLeft, feedback, handleAnswer]);
-
-  useEffect(() => { if (phase === 'QUIZ' && inputRef.current) inputRef.current.focus(); }, [currentQ, phase]);
-
-  const q = questions[currentQ];
-
-  return (
-    <div className="p-6 md:p-12 max-w-2xl mx-auto">
-      <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
-
-      {phase === 'SELECT' && (
-        <div>
-          <div className="text-center mb-8">
-            <h2 className="text-4xl font-black text-white mb-2">英単語バイト</h2>
-            <p className="text-gray-400">日本語を見て英単語を入力しよう！<br />全問正解でボーナス報酬 ×1.5</p>
-          </div>
-          <div className="space-y-4">
-            {WORD_LEVELS.map((lv, i) => (
-              <button key={i} onClick={() => startQuiz(i)} className={`w-full p-6 rounded-2xl border-2 text-left transition-all hover:-translate-y-1 ${lv.bg}`}>
-                <div className="flex justify-between items-center gap-3">
-                  <div>
-                    <span className={`text-2xl font-black ${lv.color}`}>{lv.label}</span>
-                    <p className="text-gray-400 text-sm mt-1">全{QUIZ_COUNT}問 / 1問10秒</p>
-                  </div>
-                  <div className="text-right">
-                    <div className={`text-2xl md:text-3xl font-black ${lv.color}`}>最大 {Math.floor(lv.reward * 1.5).toLocaleString()} G</div>
-                    <div className="text-gray-500 text-[11px]">全問正解ボーナス込み</div>
-                  </div>
-                </div>
-              </button>
-            ))}
-          </div>
-          <p className="text-center text-gray-600 text-xs mt-6">※報酬は正解数に比例。参加費無料！</p>
-        </div>
-      )}
-
-      {phase === 'QUIZ' && q && (
-        <div>
-          <div className="flex justify-between items-center mb-4">
-            <span className="text-gray-400 font-bold">{currentQ + 1} / {QUIZ_COUNT}問</span>
-            <span className={`text-2xl font-black ${timeLeft <= 3 ? 'text-red-400 animate-pulse' : 'text-amber-300'}`}>⏱ {timeLeft}秒</span>
-            <span className={`text-sm font-bold ${WORD_LEVELS[level].color}`}>{WORD_LEVELS[level].label}</span>
-          </div>
-          <div className="w-full bg-white/10 rounded-full h-2 mb-8">
-            <div className="h-2 rounded-full bg-amber-400 transition-all" style={{ width: `${(currentQ / QUIZ_COUNT) * 100}%` }} />
-          </div>
-          <Panel className={`p-10 text-center mb-6 border-2 ${feedback === 'correct' ? 'border-emerald-500' : feedback === 'wrong' ? 'border-red-500' : ''}`}>
-            <p className="text-gray-400 text-xs font-bold mb-3 tracking-[0.3em]">日本語 → 英語</p>
-            <p className="text-4xl md:text-5xl font-black text-white mb-2">{q.ja}</p>
-            {feedback && (
-              <p className={`text-xl font-black mt-4 ${feedback === 'correct' ? 'text-emerald-400' : 'text-red-400'}`}>
-                {feedback === 'correct' ? '✅ 正解！' : `❌ 不正解… 正解: ${q.en}`}
-              </p>
-            )}
-          </Panel>
-          <div className="flex gap-3">
-            <input ref={inputRef} type="text" value={input} onChange={e => setInput(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && !feedback && handleAnswer(input)}
-              placeholder="英単語を入力して Enter" disabled={!!feedback}
-              className="flex-1 bg-black/50 text-white font-mono text-xl p-4 rounded-xl border-2 border-white/10 focus:outline-none focus:border-amber-400 disabled:opacity-50" />
-            <GoldButton onClick={() => !feedback && handleAnswer(input)} disabled={!!feedback} className="px-6">回答</GoldButton>
-          </div>
-        </div>
-      )}
-
-      {phase === 'RESULT' && (
-        <div className="text-center">
-          <Panel gold className="p-10 mb-6">
-            <div className="text-6xl mb-4">{score === QUIZ_COUNT ? '🏆' : score >= 3 ? '👍' : '😢'}</div>
-            <h3 className="text-3xl font-black text-white mb-2">バイト終了！</h3>
-            <p className="text-gray-400 mb-6">{WORD_LEVELS[level].label} / 全{QUIZ_COUNT}問</p>
-            <div className="text-6xl font-black text-amber-300 mb-2">{score}<span className="text-2xl text-gray-400">/{QUIZ_COUNT}</span></div>
-            {score === QUIZ_COUNT && <div className="bg-amber-500/10 border border-amber-500 rounded-xl p-3 mb-4 text-amber-300 font-bold">🎉 全問正解ボーナス ×1.5 適用！</div>}
-            <div className="text-3xl font-black text-emerald-400">+{earned.toLocaleString()} G</div>
-          </Panel>
-          <div className="flex gap-4">
-            <button onClick={() => setPhase('SELECT')} className="flex-1 bg-white/10 hover:bg-white/20 text-white py-4 rounded-xl font-bold transition">レベル選択へ</button>
-            <GoldButton onClick={() => startQuiz(level)} className="flex-1 py-4">もう一度！</GoldButton>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ==========================================================
    マインスイーパー採掘

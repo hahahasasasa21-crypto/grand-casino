@@ -1,0 +1,216 @@
+/* ==========================================================
+   YUTAPON WORKS — 仕事・資格・就職のデータ
+   ・アルバイト … 誰でもすぐ働ける。ミニゲームの出来で日給が決まる
+   ・資格      … 受験料を払って試験に合格すると取得。就職の条件になる
+   ・就職      … 採用試験に受かると社員に。給料（時間経過）＋出勤（ミニゲーム）
+                 経験値がたまると昇進試験を受けられる
+   ========================================================== */
+
+/* ---------- ミニゲームの種類 ---------- */
+export const GAMES = {
+  WORD: { key: 'WORD', name: '英単語', icon: '📚', desc: '日本語を見て英単語を入力' },
+  TYPING: { key: 'TYPING', name: 'タイピング', icon: '⌨️', desc: '表示された文をそのまま打つ' },
+  CALC: { key: 'CALC', name: '暗算', icon: '🧮', desc: '計算の答えを入力' },
+  MEMORY: { key: 'MEMORY', name: '記憶', icon: '🧠', desc: '並びを覚えて同じ順に押す' },
+  SORT: { key: 'SORT', name: '仕分け', icon: '📦', desc: '品物を正しい箱へ入れる' },
+  INSPECT: { key: 'INSPECT', name: '検品', icon: '🔍', desc: 'ひとつだけ違うものを探す' },
+};
+export const gameOf = (k) => GAMES[k] || GAMES.WORD;
+
+/* ---------- アルバイト（資格なしで働ける） ---------- */
+export const PART_TIME = [
+  { key: 'POST', name: 'ポスティング', icon: '📮', game: 'SORT', diff: 1, pay: 450, cool: 30000, desc: 'チラシを地区ごとに仕分けて配る。' },
+  { key: 'TISSUE', name: 'ティッシュ配り', icon: '🧻', game: 'INSPECT', diff: 1, pay: 500, cool: 30000, desc: '受け取ってくれそうな人を見分ける。' },
+  { key: 'WORDPT', name: '英単語バイト', icon: '📚', game: 'WORD', diff: 1, pay: 600, cool: 30000, desc: '単語カードの検収作業。昔ながらのバイト。' },
+  { key: 'TRAFFIC', name: '交通整理', icon: '🚧', game: 'MEMORY', diff: 1, pay: 650, cool: 35000, desc: '通した車の順番を覚えておく。' },
+  { key: 'CONVENI', name: 'コンビニ店員', icon: '🏪', game: 'CALC', diff: 2, pay: 900, cool: 40000, desc: 'レジ打ちとおつりの計算。' },
+  { key: 'CAFE', name: 'カフェ店員', icon: '☕', game: 'MEMORY', diff: 2, pay: 950, cool: 40000, desc: '注文を聞いて順番どおりに出す。' },
+  { key: 'WAREHOUSE', name: '倉庫仕分け', icon: '📦', game: 'SORT', diff: 2, pay: 1000, cool: 40000, desc: '流れてくる荷物を行き先別に。' },
+  { key: 'DATA', name: 'データ入力', icon: '⌨️', game: 'TYPING', diff: 2, pay: 1100, cool: 40000, desc: '伝票をひたすら打ち込む。' },
+  { key: 'QCPT', name: '検品スタッフ', icon: '🔍', game: 'INSPECT', diff: 2, pay: 1200, cool: 45000, desc: 'ラインを流れる製品の不良を見つける。' },
+  { key: 'CRAM', name: '塾講師', icon: '🎓', game: 'WORD', diff: 3, pay: 1600, cool: 50000, desc: '中高生に英単語を教える。' },
+  { key: 'CALLC', name: 'コールセンター', icon: '📞', game: 'TYPING', diff: 3, pay: 1800, cool: 50000, desc: '聞きながら記録を打ち込む。' },
+  { key: 'MOVING', name: '引っ越し作業', icon: '🚚', game: 'SORT', diff: 3, pay: 2000, cool: 55000, desc: '荷物を部屋ごとに振り分ける。体力勝負。' },
+  { key: 'NIGHT', name: '夜間警備', icon: '🔦', game: 'INSPECT', diff: 3, pay: 2200, cool: 60000, desc: '深夜のビルで異常を見つける。' },
+  { key: 'MARKET', name: '市場の競り子', icon: '🐟', game: 'CALC', diff: 3, pay: 2400, cool: 60000, desc: '早朝の市場で値段を即座に計算。' },
+];
+export const partTimeOf = (k) => PART_TIME.find(j => j.key === k) || null;
+
+/* ---------- 資格 ---------- */
+export const LICENSES = [
+  { key: 'ENG', name: '英語検定', icon: '🇬🇧', fee: 5000, game: 'WORD', diff: 3, pass: 0.8, req: [], desc: '英語の読み書きができる証明。' },
+  { key: 'TYPE', name: 'タイピング技能士', icon: '⌨️', fee: 5000, game: 'TYPING', diff: 3, pass: 0.8, req: [], desc: '速く正確に打てる証明。' },
+  { key: 'ABACUS', name: '珠算検定', icon: '🧮', fee: 5000, game: 'CALC', diff: 3, pass: 0.8, req: [], desc: '暗算の速さの証明。' },
+  { key: 'MEMO', name: '記憶力検定', icon: '🧠', fee: 6000, game: 'MEMORY', diff: 3, pass: 0.8, req: [], desc: '短期記憶の強さの証明。' },
+  { key: 'QC', name: '品質管理士', icon: '🔍', fee: 6000, game: 'INSPECT', diff: 3, pass: 0.8, req: [], desc: '不良品を見抜く目の証明。' },
+  { key: 'COOK', name: '調理師免許', icon: '🍳', fee: 12000, game: 'SORT', diff: 4, pass: 0.8, req: [], desc: '食材の扱いと衛生の国家資格。' },
+  { key: 'DEALER', name: 'ディーラー資格', icon: '🃏', fee: 15000, game: 'CALC', diff: 4, pass: 0.85, req: ['ABACUS'], desc: 'カジノでテーブルを任される資格。' },
+  { key: 'BOOK', name: '簿記2級', icon: '📒', fee: 15000, game: 'CALC', diff: 4, pass: 0.85, req: ['ABACUS'], desc: '帳簿を読み書きできる証明。' },
+  { key: 'IT', name: '情報処理技術者', icon: '💻', fee: 18000, game: 'TYPING', diff: 4, pass: 0.85, req: ['TYPE'], desc: 'システムを設計・実装できる証明。' },
+  { key: 'SEC', name: '証券外務員', icon: '📈', fee: 20000, game: 'CALC', diff: 4, pass: 0.85, req: ['BOOK'], desc: '金融商品を扱える資格。' },
+  { key: 'TEACH', name: '教員免許', icon: '🎓', fee: 20000, game: 'WORD', diff: 4, pass: 0.85, req: ['ENG'], desc: '学校で教えるための免許。' },
+  { key: 'ARCH', name: '建築士', icon: '📐', fee: 25000, game: 'MEMORY', diff: 4, pass: 0.85, req: ['QC'], desc: '建物を設計できる国家資格。' },
+  { key: 'PILOT', name: '操縦士免許', icon: '✈️', fee: 55000, game: 'INSPECT', diff: 5, pass: 0.9, req: ['QC', 'MEMO'], desc: '旅客機を操縦できる免許。' },
+  { key: 'DOC', name: '医師免許', icon: '🩺', fee: 60000, game: 'MEMORY', diff: 5, pass: 0.9, req: ['MEMO', 'QC'], desc: '医療行為を行える国家資格。' },
+  { key: 'LAW', name: '弁護士資格', icon: '⚖️', fee: 60000, game: 'WORD', diff: 5, pass: 0.9, req: ['TEACH'], desc: '法廷に立てる資格。最難関のひとつ。' },
+  { key: 'PHD', name: '博士号', icon: '🔬', fee: 80000, game: 'WORD', diff: 5, pass: 0.9, req: ['TEACH', 'ARCH'], desc: '研究者として認められた証。' },
+];
+export const licenseOf = (k) => LICENSES.find(l => l.key === k) || null;
+
+/* ---------- 役職（全職種で共通のはしご） ---------- */
+export const RANKS = [
+  { name: '見習い', mult: 1.00, exp: 0 },
+  { name: '一般社員', mult: 1.35, exp: 150 },
+  { name: '主任', mult: 1.75, exp: 450 },
+  { name: '係長', mult: 2.25, exp: 900 },
+  { name: '課長', mult: 2.90, exp: 1500 },
+  { name: '部長', mult: 3.70, exp: 2300 },
+  { name: '役員', mult: 4.80, exp: 3300 },
+];
+
+/* ---------- 就職できる仕事 ---------- */
+export const CAREERS = [
+  {
+    key: 'SALES', name: '販売スタッフ', icon: '🛍️', field: '小売',
+    req: [], minWorkExp: 120, salary: 380, shiftPay: 1300, shift: { game: 'MEMORY', diff: 2 },
+    exam: { game: 'MEMORY', diff: 2, pass: 0.6 }, desc: '店頭に立ち、客の要望を覚えて応える。',
+  },
+  {
+    key: 'CLERK', name: '事務員', icon: '🗂️', field: '事務',
+    req: ['TYPE'], minWorkExp: 0, salary: 450, shiftPay: 1500, shift: { game: 'TYPING', diff: 2 },
+    exam: { game: 'TYPING', diff: 3, pass: 0.65 }, desc: '書類作成とデータ管理。まずはここから。',
+  },
+  {
+    key: 'SECURITY', name: '警備主任', icon: '🛡️', field: '警備',
+    req: ['QC'], minWorkExp: 150, salary: 600, shiftPay: 2000, shift: { game: 'INSPECT', diff: 3 },
+    exam: { game: 'INSPECT', diff: 3, pass: 0.7 }, desc: '施設の監視と巡回の責任者。',
+  },
+  {
+    key: 'ACCOUNT', name: '経理', icon: '📒', field: '財務',
+    req: ['BOOK'], minWorkExp: 200, salary: 750, shiftPay: 2400, shift: { game: 'CALC', diff: 3 },
+    exam: { game: 'CALC', diff: 4, pass: 0.7 }, desc: '会社のお金の流れを管理する。',
+  },
+  {
+    key: 'DEALERJOB', name: 'カジノディーラー', icon: '🃏', field: 'カジノ',
+    req: ['DEALER'], minWorkExp: 250, salary: 900, shiftPay: 2900, shift: { game: 'CALC', diff: 4 },
+    exam: { game: 'CALC', diff: 4, pass: 0.75 }, desc: 'YUTAPON CASINO のテーブルを仕切る。',
+  },
+  {
+    key: 'CHEF', name: '調理師', icon: '🍳', field: '飲食',
+    req: ['COOK'], minWorkExp: 250, salary: 850, shiftPay: 2700, shift: { game: 'SORT', diff: 4 },
+    exam: { game: 'SORT', diff: 4, pass: 0.72 }, desc: '厨房を預かり、段取りで勝負する。',
+  },
+  {
+    key: 'TEACHER', name: '教師', icon: '🏫', field: '教育',
+    req: ['TEACH'], minWorkExp: 300, salary: 1000, shiftPay: 3100, shift: { game: 'WORD', diff: 4 },
+    exam: { game: 'WORD', diff: 4, pass: 0.75 }, desc: '教壇に立ち、生徒を送り出す。',
+  },
+  {
+    key: 'CODER', name: 'プログラマー', icon: '💻', field: 'IT',
+    req: ['IT'], minWorkExp: 300, salary: 1250, shiftPay: 3800, shift: { game: 'TYPING', diff: 4 },
+    exam: { game: 'TYPING', diff: 4, pass: 0.75 }, desc: 'システムを書いて世界を動かす。',
+  },
+  {
+    key: 'ARCHITECT', name: '建築士', icon: '📐', field: '建設',
+    req: ['ARCH'], minWorkExp: 400, salary: 1400, shiftPay: 4200, shift: { game: 'MEMORY', diff: 4 },
+    exam: { game: 'MEMORY', diff: 4, pass: 0.78 }, desc: '図面を引き、街をつくる。',
+  },
+  {
+    key: 'TRADER', name: '証券トレーダー', icon: '📈', field: '金融',
+    req: ['SEC'], minWorkExp: 450, salary: 1600, shiftPay: 4800, shift: { game: 'CALC', diff: 5 },
+    exam: { game: 'CALC', diff: 5, pass: 0.8 }, desc: '一瞬の判断で数字を積み上げる。',
+  },
+  {
+    key: 'PILOTJOB', name: 'パイロット', icon: '✈️', field: '航空',
+    req: ['PILOT'], minWorkExp: 600, salary: 1900, shiftPay: 5600, shift: { game: 'INSPECT', diff: 5 },
+    exam: { game: 'INSPECT', diff: 5, pass: 0.82 }, desc: '何百人の命を預かって空を飛ぶ。',
+  },
+  {
+    key: 'DOCTOR', name: '医師', icon: '🩺', field: '医療',
+    req: ['DOC'], minWorkExp: 700, salary: 2200, shiftPay: 6400, shift: { game: 'MEMORY', diff: 5 },
+    exam: { game: 'MEMORY', diff: 5, pass: 0.84 }, desc: '診断と治療。休みはあまりない。',
+  },
+  {
+    key: 'LAWYER', name: '弁護士', icon: '⚖️', field: '法務',
+    req: ['LAW'], minWorkExp: 700, salary: 2350, shiftPay: 6800, shift: { game: 'WORD', diff: 5 },
+    exam: { game: 'WORD', diff: 5, pass: 0.84 }, desc: '言葉で人を守る仕事。',
+  },
+  {
+    key: 'SCIENTIST', name: '研究者', icon: '🔬', field: '研究',
+    req: ['PHD'], minWorkExp: 800, salary: 2600, shiftPay: 7400, shift: { game: 'INSPECT', diff: 5 },
+    exam: { game: 'INSPECT', diff: 5, pass: 0.86 }, desc: '誰も知らないことを最初に知る。',
+  },
+];
+export const careerOf = (k) => CAREERS.find(c => c.key === k) || null;
+
+/* ---------- 計算まわり ---------- */
+export const PAY_INTERVAL = 15 * 60 * 1000;   // 給料日の間隔
+export const PAY_MAX_PERIODS = 8;             // オフライン中に貯まる上限
+export const SHIFT_COOLDOWN = 60 * 1000;      // 出勤の間隔
+
+export const rankOf = (i) => RANKS[Math.max(0, Math.min(RANKS.length - 1, i || 0))];
+export const nextRank = (i) => (i + 1 < RANKS.length ? RANKS[i + 1] : null);
+
+/** 給料（1回の給料日あたり） */
+export function salaryOf(job) {
+  const c = careerOf(job?.key);
+  if (!c) return 0;
+  return Math.round(c.salary * rankOf(job.rank).mult);
+}
+
+/** 出勤1回の満額（実際は出来ばえを掛ける）。役職の効きは給料より控えめ */
+export function shiftPayOf(job) {
+  const c = careerOf(job?.key);
+  if (!c) return 0;
+  const m = 1 + (rankOf(job.rank).mult - 1) * 0.5;
+  return Math.round(c.shiftPay * m);
+}
+
+/** 出勤で入る経験値 */
+export function shiftExp(diff, perf) {
+  return Math.max(1, Math.round((8 + diff * 4) * (0.4 + perf * 0.9)));
+}
+
+/** 昇進に必要な経験値（届いていなければ残りを返す） */
+export function promotionNeed(job) {
+  const nxt = nextRank(job?.rank ?? 0);
+  if (!nxt) return null;
+  return { rank: nxt, need: nxt.exp, left: Math.max(0, nxt.exp - (job?.exp || 0)) };
+}
+
+/** 応募の可否 */
+export function canApply(career, licenses, workExp) {
+  const miss = (career.req || []).filter(r => !licenses.includes(r));
+  if (miss.length) return { ok: false, reason: `資格が足りません：${miss.map(m => licenseOf(m)?.name || m).join('・')}` };
+  if ((workExp || 0) < (career.minWorkExp || 0)) {
+    return { ok: false, reason: `通算経験 ${career.minWorkExp} が必要です（いま ${Math.floor(workExp || 0)}）` };
+  }
+  return { ok: true, reason: '' };
+}
+
+/** 受験の可否 */
+export function canTakeExam(license, licenses) {
+  if (licenses.includes(license.key)) return { ok: false, reason: '取得済みです' };
+  const miss = (license.req || []).filter(r => !licenses.includes(r));
+  if (miss.length) return { ok: false, reason: `先に ${miss.map(m => licenseOf(m)?.name || m).join('・')} が必要` };
+  return { ok: true, reason: '' };
+}
+
+/** 応募にかかる受験料 */
+export const applyFee = (career) => Math.round(career.salary * 8);
+
+/** ランキングなどに出す肩書き */
+export function jobLabel(job) {
+  const c = careerOf(job?.key);
+  if (!c) return null;
+  return `${c.icon}${c.name}・${rankOf(job.rank).name}`;
+}
+
+/* ---------- 出来ばえの評価 ---------- */
+export function gradeOf(perf) {
+  if (perf >= 0.95) return { g: 'S', color: '#fbbf24', word: '完璧な仕事' };
+  if (perf >= 0.8) return { g: 'A', color: '#34d399', word: 'よくやった' };
+  if (perf >= 0.6) return { g: 'B', color: '#60a5fa', word: 'まずまず' };
+  if (perf >= 0.4) return { g: 'C', color: '#a3a3a3', word: 'ぎりぎり' };
+  return { g: 'D', color: '#f87171', word: '要練習' };
+}

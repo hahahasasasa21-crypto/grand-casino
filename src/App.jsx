@@ -1,16 +1,28 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, deleteDoc, where } from 'firebase/firestore';
-import { Coins, Trophy, ArrowLeft, AlertCircle, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, TrendingUp, Lock, Newspaper, Pickaxe, BookOpen, History, ShoppingBag, Crown } from 'lucide-react';
+import { doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, deleteDoc, where, runTransaction } from 'firebase/firestore';
+import { Coins, Trophy, ArrowLeft, AlertCircle, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, TrendingUp, Lock, Newspaper, Pickaxe, BookOpen, History, ShoppingBag, Crown, Building2, Users } from 'lucide-react';
 import { db, auth, appId, postNews } from './shared/firebase';
 import { FeltBackdrop, Panel, GoldButton, SectionTitle, ErrorBoundary, VipBadge, TopBadge, TAU } from './shared/ui';
 import {
   VIP_PRICE, VIP_NEWS_COOLDOWN, VIP_NEWS_MAX_LEN, VIP_SUB_PRICE, VIP_SUB_MS,
-  loanState, effectiveVip, goldPrice, goldSellPrice, GOLD_BASE, ITEMS,
+  loanState, effectiveVip, goldPrice, goldSellPrice, GOLD_BASE, ITEMS, ICONS, iconOf,
 } from './shared/vip';
 import Shop from './views/Shop';
+import CorpView from './views/Corp.jsx';
+import SchoolView from './games/school/index.jsx';
+import ProfileView, { availableTags, TagChips } from './views/Profile.jsx';
+import { eduLevelOf, EDU_NAME, schoolOf } from './games/school/schools.js';
 import WorkView from './games/work/index.jsx';
-import { jobLabel, salaryOf, careerOf as workCareerOf, rankOf as workRankOf, PAY_INTERVAL, PAY_MAX_PERIODS } from './games/work/jobs.js';
+import {
+  jobLabel, salaryOf, careerOf as workCareerOf, rankOf as workRankOf,
+  bankerRateBonus, casinoStaffDiscount, PAY_INTERVAL, PAY_MAX_PERIODS,
+} from './games/work/jobs.js';
+import {
+  HOUSE_START, houseRef, ensureHouse, houseDeposit, houseWithdraw, houseLend, houseRepay,
+  houseLoanInterest, houseDepositInterest, houseCorpTax, houseShop, houseCasino, housePayroll, houseTotal, bigYen,
+} from './shared/house';
+import { corpTypeOf, bankPayable, MIN_BANK_RATE, MAX_BANK_RATE } from './shared/corp.js';
 import Blackjack from './games/Blackjack';
 import LifeGame from './games/life/index.jsx';
 import SlotMachine from './games/SlotMachine';
@@ -26,20 +38,20 @@ const HORSE_RACING_EVENT_ACTIVE = true;
    英単語定数
    ========================================================== */
 
-/* ==========================================================
-   採掘定数
-   ========================================================== */
-const MINE_LEVELS = [
-  { label: '浅坑道', cost: 200, rows: 6, cols: 8, mines: 8, reward: 800, color: 'text-green-400', bg: 'bg-green-500/10 border-green-500/30', icon: '⛏️' },
-  { label: '中層坑道', cost: 500, rows: 8, cols: 10, mines: 18, reward: 2500, color: 'text-yellow-400', bg: 'bg-yellow-500/10 border-yellow-500/30', icon: '🪨' },
-  { label: '深層坑道', cost: 1500, rows: 10, cols: 12, mines: 40, reward: 8000, color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/30', icon: '💣' },
-  { label: '地獄坑道', cost: 5000, rows: 10, cols: 14, mines: 65, reward: 30000, color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30', icon: '☠️' },
-];
 
 /* ==========================================================
    金融定数
    ========================================================== */
 const INTEREST_RATE_30MIN = 0.001;
+/* ---------- 銀行の口座の種類 ---------- */
+const ACCOUNT_TYPES = [
+  { key: 'ORDINARY', name: '普通預金', icon: '💳', mult: 1, loanMul: 1, lockMs: 0,
+    desc: 'いつでも出し入れ自由。標準の金利。' },
+  { key: 'FIXED', name: '定期預金', icon: '🔒', mult: 3, loanMul: 1, lockMs: 30 * 60 * 1000,
+    desc: '金利3倍。ただし預け入れから30分は引き出せない。' },
+  { key: 'CURRENT', name: '当座預金', icon: '🧾', mult: 0, loanMul: 1.5, lockMs: 0,
+    desc: '利息はつかないが、借入上限が1.5倍になる。' },
+];
 const INTEREST_INTERVAL = 1800000;
 const LOAN_INTEREST_RATE = 0.003;
 const LOAN_INTERVAL = 900000;
@@ -78,6 +90,32 @@ export default function App() {
   const [jobRecord, setJobRecord] = useState({});
   const [workExp, setWorkExp] = useState(0);
   const [workCool, setWorkCool] = useState({});
+  const [edu, setEdu] = useState({});
+  const [profile, setProfile] = useState({});
+  const [ownedIcons, setOwnedIcons] = useState([]);
+  const [ownedTags, setOwnedTags] = useState([]);
+  const [stats, setStats] = useState({});
+  const [jobChanges, setJobChanges] = useState(0);
+  const [viewProfile, setViewProfile] = useState(null);
+  const [bankId, setBankId] = useState('YUTAPON');
+  const [acctType, setAcctType] = useState('ORDINARY');
+  const [fixedUntil, setFixedUntil] = useState(0);
+  const [house, setHouse] = useState(null);
+  const [companies, setCompanies] = useState([]);
+  const [rankTab, setRankTab] = useState('ALL');
+  const [playerRows, setPlayerRows] = useState([]);
+
+  /* ---------- 口座の種類 ---------- */
+  const myBank = useMemo(
+    () => (bankId === 'YUTAPON' ? null : companies.find(c => c.id === bankId && c.isBank) || null),
+    [bankId, companies]);
+  const bankName = bankId === 'YUTAPON' ? 'YUTAPON-BANK' : (myBank?.name || '（閉鎖された銀行）');
+  const baseRate = bankId === 'YUTAPON' ? INTEREST_RATE_30MIN : (myBank?.rate || 0);
+  const eduLevel = eduLevelOf(edu);
+  const acct = ACCOUNT_TYPES.find(a => a.key === acctType) || ACCOUNT_TYPES[0];
+  const myRate = Math.max(0, baseRate * acct.mult + bankerRateBonus(job));
+  const loanLimit = Math.max(0, Math.floor(creditScore * 1000 * acct.loanMul));
+
   const [marketProfit, setMarketProfit] = useState(0);
   const [topPlayer, setTopPlayer] = useState('');
   const [newsDraft, setNewsDraft] = useState('');
@@ -86,7 +124,6 @@ export default function App() {
   const [loadingMsg, setLoadingMsg] = useState('通信を確立中...');
   const [toastMsg, setToastMsg] = useState('');
   const [toastType, setToastType] = useState('info');
-  const [rankingData, setRankingData] = useState([]);
   const [transferTarget, setTransferTarget] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [bankInput, setBankInput] = useState('');
@@ -145,6 +182,15 @@ export default function App() {
         setJobRecord(d.jobRecord || {});
         setWorkExp(d.workExp || 0);
         setWorkCool(d.workCool || {});
+        setEdu(d.edu || {});
+        setProfile(d.profile || {});
+        setOwnedIcons(d.ownedIcons || []);
+        setOwnedTags(d.ownedTags || []);
+        setStats(d.stats || {});
+        setJobChanges(d.jobChanges || 0);
+        setBankId(d.bankId || 'YUTAPON');
+        setAcctType(d.acctType || 'ORDINARY');
+        setFixedUntil(d.fixedUntil || 0);
         maintainLoanFlag(d, docRef);
         maintainSubscription(d, docRef);
         setTransferHistory(d.transferHistory || []);
@@ -160,12 +206,27 @@ export default function App() {
           vip: false, vipSince: 0, lastVipNewsAt: 0, vipSubUntil: 0,
           loanStartAt: 0, items: {}, gold: 0,
           job: null, licenses: [], jobRecord: {}, workExp: 0, workCool: {},
+          bankId: 'YUTAPON', acctType: 'ORDINARY', fixedUntil: 0,
+          edu: {}, profile: { icon: 'FREE_1', tags: [], bio: '' }, ownedIcons: [], ownedTags: [],
+          stats: { casinoPlays: 0 }, jobChanges: 0,
           transferHistory: []
         });
       }
     });
     return () => unsub();
   }, [user, playerName, playerRef]);
+
+  // YUTAPON グループ金庫と会社の購読
+  useEffect(() => {
+    if (!user) return;
+    ensureHouse();
+    const unsub = onSnapshot(houseRef(), snap => { if (snap.exists()) setHouse(snap.data()); }, () => { });
+    const unsubC = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'companies'), snap => {
+      const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      setCompanies(list);
+    }, () => { });
+    return () => { unsub(); unsubC(); };
+  }, [user]);
 
   // ニュース購読
   useEffect(() => {
@@ -185,14 +246,24 @@ export default function App() {
     if (!user || !playerName || bankBalance <= 0) return;
     const timer = setInterval(() => {
       const docRef = playerRef(playerName);
-      const interest = Math.floor(bankBalance * INTEREST_RATE_30MIN);
+      const interest = Math.floor(bankBalance * myRate);
       if (interest > 0) {
-        updateDoc(docRef, { bankBalance: increment(interest), lastInterestTime: Date.now() });
-        showToast(`🏦 銀行利子 +${interest.toLocaleString()} G！`, 'success');
+        payDepositInterest(interest).then(paid => {
+          if (paid > 0) {
+            updateDoc(docRef, { bankBalance: increment(paid), lastInterestTime: Date.now() });
+            showToast(`🏦 ${bankName} の利子 +${paid.toLocaleString()} G！`, 'success');
+          } else {
+            updateDoc(docRef, { lastInterestTime: Date.now() });
+            showToast('🏦 銀行に現金がなく、利息が支払われませんでした。', 'warning');
+          }
+        });
+      } else {
+        updateDoc(docRef, { lastInterestTime: Date.now() });
       }
     }, INTEREST_INTERVAL);
     return () => clearInterval(timer);
-  }, [user, playerName, bankBalance, playerRef, showToast]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, playerName, bankBalance, myRate, bankName, playerRef, showToast]);
 
   // 給料日の見張り（アプリを開いたままでも支給されるように）
   useEffect(() => {
@@ -210,6 +281,7 @@ export default function App() {
       const interest = Math.floor(loanBalance * LOAN_INTEREST_RATE);
       if (interest > 0) {
         updateDoc(docRef, { loanBalance: increment(interest), lastLoanTime: Date.now() });
+        houseLoanInterest(interest);
         showToast(`💸 ローン利息 +${interest.toLocaleString()} G！`, 'warning');
       }
     }, LOAN_INTERVAL);
@@ -238,6 +310,12 @@ export default function App() {
           loanBalance: data.loanBalance || 0,
           gold: data.gold || 0,
           job: data.job || null,
+          edu: data.edu || {},
+          licenses: data.licenses || [],
+          profile: data.profile || {},
+          workExp: data.workExp || 0,
+          stats: data.stats || {},
+          ownedTags: data.ownedTags || [],
           creditScore: data.creditScore ?? 100,
           vip: data.vip === true || (data.vipSubUntil || 0) > Date.now(),
           createdAt: data.createdAt || 0,
@@ -248,16 +326,7 @@ export default function App() {
       players.sort((a, b) => b.total - a.total);
       setMarketProfit(players.reduce((a, p) => a + p.profit, 0));
       setTopPlayer(players.length ? players[0].name : '');
-      // YUTAPON-BANK 自身も番付に参加する（預かり資産＋貸出残高＝銀行の総資産）
-      const bankRow = {
-        name: 'YUTAPON-BANK', isBank: true,
-        balance: 0, bankBalance: deposits, loanBalance: 0, gold: 0, job: null,
-        creditScore: 999, vip: true, createdAt: 0,
-        deposits, loans, accounts,
-        profit: 0, total: deposits + loans,
-      };
-      const merged = [...players.slice(0, 20), bankRow].sort((a, b) => b.total - a.total);
-      setRankingData(merged);
+      setPlayerRows(players.slice(0, 20));
     });
     return () => unsub();
   }, [user, view]);
@@ -281,9 +350,11 @@ export default function App() {
     if (Date.now() < until) return;
     subBusyRef.current = true;
     try {
-      if ((data.balance || 0) >= VIP_SUB_PRICE) {
-        await updateDoc(docRef, { balance: increment(-VIP_SUB_PRICE), vipSubUntil: Date.now() + VIP_SUB_MS });
-        showToast(`👑 VIP定期購入を更新しました（-${VIP_SUB_PRICE.toLocaleString()} G）`, 'info');
+      const price = Math.round(VIP_SUB_PRICE * (1 - casinoStaffDiscount(data.job)));
+      if ((data.balance || 0) >= price) {
+        await updateDoc(docRef, { balance: increment(-price), vipSubUntil: Date.now() + VIP_SUB_MS });
+        houseShop(price);
+        showToast(`👑 VIP定期購入を更新しました（-${price.toLocaleString()} G）`, 'info');
       } else {
         await updateDoc(docRef, { vipSubUntil: 0 });
         showToast('👑 所持金が足りず、VIP定期購入は自動解約されました。', 'warning');
@@ -301,7 +372,7 @@ export default function App() {
     const last = j.lastPayAt || j.hiredAt || now;
     const periods = Math.min(PAY_MAX_PERIODS, Math.floor((now - last) / PAY_INTERVAL));
     if (periods <= 0) return;
-    const amount = salaryOf(j) * periods;
+    const amount = salaryOf(j, eduLevelOf(data.edu || {}), data.vip === true || (data.vipSubUntil || 0) > Date.now()) * periods;
     if (amount <= 0) return;
     salaryBusyRef.current = true;
     try {
@@ -311,10 +382,29 @@ export default function App() {
         workExp: increment(5 * periods),
         [`jobRecord.${j.key}`]: { rank: nj.rank || 0, exp: nj.exp || 0 },
       });
+      if (workCareerOf(j.key)?.group) housePayroll(amount);
       showToast(`💼 給料日！ ${workCareerOf(j.key).name}・${workRankOf(j.rank).name} +${amount.toLocaleString()} G（${periods}回分）`, 'success');
     } catch (e) { /* noop */ }
     finally { setTimeout(() => { salaryBusyRef.current = false; }, 2000); }
   };
+
+  const saveProfile = useCallback(async (patch) => {
+    if (!playerName) return;
+    const next = {};
+    for (const [k, v] of Object.entries(patch)) next[`profile.${k}`] = v;
+    await updateDoc(playerRef(playerName), next);
+  }, [playerName, playerRef]);
+
+  const buyIcon = useCallback(async (ic) => {
+    if (!playerName) return;
+    if (balance < ic.price) { showToast('所持金が足りません。', 'error'); return; }
+    await updateDoc(playerRef(playerName), {
+      balance: increment(-ic.price),
+      ownedIcons: [...new Set([...(ownedIcons || []), ic.key])],
+      'profile.icon': ic.key,
+    });
+    houseShop(ic.price);
+  }, [playerName, playerRef, balance, ownedIcons, showToast]);
 
   const saveWork = useCallback(async (patch) => {
     if (!playerName) return;
@@ -325,12 +415,18 @@ export default function App() {
     const now = Date.now();
     const diff = now - (data.lastInterestTime || now);
     if (diff >= INTEREST_INTERVAL && (data.bankBalance || 0) > 0) {
-      const periods = Math.min(Math.floor(diff / INTEREST_INTERVAL), 500);
+      const periods = Math.min(Math.floor(diff / INTEREST_INTERVAL), 48);
+      const rate = Math.max(0, (data.bankId === 'YUTAPON' || !data.bankId
+        ? INTEREST_RATE_30MIN
+        : (companies.find(c => c.id === data.bankId)?.rate || 0))
+        * (ACCOUNT_TYPES.find(a => a.key === (data.acctType || 'ORDINARY'))?.mult ?? 1)
+        + bankerRateBonus(data.job));
       let bank = data.bankBalance, total = 0;
-      for (let i = 0; i < periods; i++) { const int = Math.floor(bank * INTEREST_RATE_30MIN); total += int; bank += int; }
+      for (let i = 0; i < periods; i++) { const int = Math.floor(bank * rate); total += int; bank += int; }
       if (total > 0) {
-        await updateDoc(docRef, { bankBalance: increment(total), lastInterestTime: now });
-        showToast(`🏦 不在中の利子 +${total.toLocaleString()} G！`, 'success');
+        const paid = await payDepositInterest(total);
+        await updateDoc(docRef, { ...(paid > 0 ? { bankBalance: increment(paid) } : {}), lastInterestTime: now });
+        if (paid > 0) showToast(`🏦 不在中の利子 +${paid.toLocaleString()} G！`, 'success');
       } else {
         await updateDoc(docRef, { lastInterestTime: now });
       }
@@ -344,6 +440,7 @@ export default function App() {
       const periods = Math.min(Math.floor(diff / LOAN_INTERVAL), 500);
       let loan = data.loanBalance, total = 0;
       for (let i = 0; i < periods; i++) { const int = Math.floor(loan * LOAN_INTEREST_RATE); total += int; loan += int; }
+      if (total > 0) houseLoanInterest(total);
       if (total > 0) {
         await updateDoc(docRef, { loanBalance: increment(total), lastLoanTime: now });
         showToast(`💸 不在中のローン利息 +${total.toLocaleString()} G`, 'warning');
@@ -364,6 +461,42 @@ export default function App() {
     }
     await updateDoc(playerRef(playerName), { balance: increment(amount) });
   }, [playerName, playerRef, showToast]);
+
+  /** ハウス（YUTAPON-CASINO）が胴元のゲーム用。負けたぶんが金庫に入る */
+  const casinoBalance = useCallback(async (amount) => {
+    await updateBalance(amount);
+    if (amount) houseCasino(-amount);
+    // 賭けた回数を数える（称号の条件になる）
+    if (amount < 0 && playerName) {
+      updateDoc(playerRef(playerName), { 'stats.casinoPlays': increment(1), 'stats.wagered': increment(-amount) }).catch(() => { });
+    }
+  }, [updateBalance, playerName, playerRef]);
+
+  /** 会社の求人で働いたぶんを、その会社の資産から払う。実際に払えた額を返す */
+  const onCorpWork = useCallback(async (corpId, amount) => {
+    let paid = 0;
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'companies', corpId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return;
+        const c = snap.data();
+        const free = Math.max(0, (c.capital || 0) - (c.deposits || 0));
+        paid = Math.max(0, Math.min(amount, free));
+        if (paid <= 0) return;
+        tx.update(ref, { capital: increment(-paid), wages: increment(paid), updatedAt: Date.now() });
+      });
+      if (paid > 0) await updateBalance(paid);
+    } catch (e) { paid = 0; }
+    return paid;
+  }, [updateBalance]);
+
+  /** YUTAPON グループ社員が働いた成果 */
+  const onGroupWork = useCallback((group, earned, paid) => {
+    if (group === 'BANK') houseLoanInterest(Math.max(0, Math.round(earned || 0)));
+    else houseCasino(Math.max(0, Math.round(earned || 0)));
+    if (paid > 0) housePayroll(Math.round(paid));
+  }, []);
 
   const addTransferHistory = async (entry) => {
     const docRef = playerRef(playerName);
@@ -397,11 +530,57 @@ export default function App() {
     } else showToast('まだ資産があります！', 'error');
   };
 
+  const emitNews = useCallback((msg, type) => { postNews(db, appId, msg, type); }, []);
+
   /* ---------- VIP・ショップ ---------- */
   const delinq = useMemo(() => loanState(loanBalance, loanStartAt), [loanBalance, loanStartAt, newsTick]);
   const vipPlan = vip === true || vipSubUntil > Date.now();
   const vipActive = effectiveVip({ vip, vipSubUntil, delinquent: delinq.delinquent });
   const goldPx = useMemo(() => goldPrice(marketProfit), [marketProfit]);
+  const staffOff = casinoStaffDiscount(job);
+  const vipPrice = Math.round(VIP_PRICE * (1 - staffOff));
+  const vipSubPrice = Math.round(VIP_SUB_PRICE * (1 - staffOff));
+
+  /** ショップの称号（大富豪タグなど）を買う。VIP限定・重複不可 */
+  const buyTag = useCallback(async (t) => {
+    if (!playerName) return;
+    if (!vipActive) { showToast('この称号はVIP限定です。', 'warning'); return; }
+    if ((ownedTags || []).includes(t.key)) { showToast('すでに持っています。', 'warning'); return; }
+    if (balance < t.price) { showToast('所持金が足りません。', 'error'); return; }
+    await updateDoc(playerRef(playerName), {
+      balance: increment(-t.price),
+      ownedTags: [...new Set([...(ownedTags || []), t.key])],
+    });
+    houseShop(t.price);
+    showToast(`${t.icon} ${t.name} を手に入れました！`, 'success');
+    if (emitNews) emitNews(`${t.icon} ${playerName} が「${t.name}」を手に入れた！`, 'jackpot');
+  }, [playerName, playerRef, balance, ownedTags, vipActive, showToast, emitNews]);
+
+  const myCompanies = useMemo(() => companies.filter(c => c.owner === playerName), [companies, playerName]);
+
+  /* ---------- 長者番付（プレイヤー／企業／すべて） ---------- */
+  const houseRow = useMemo(() => ({
+    name: 'YUTAPON-BANK', isBank: true, isHouse: true, kind: 'CORP',
+    balance: 0, bankBalance: house?.depositFlow || 0, loanBalance: 0, gold: 0, job: null,
+    creditScore: 999, vip: true, createdAt: 0,
+    deposits: Math.max(0, house?.depositFlow || 0), loans: Math.max(0, house?.loansOut || 0),
+    casinoTake: house?.casinoTake || 0, corpTax: house?.corpTax || 0,
+    profit: 0, total: houseTotal(house || { bankAssets: HOUSE_START }),
+  }), [house]);
+
+  const corpRows = useMemo(() => companies.map(c => ({
+    name: c.name, kind: 'CORP', isCompany: true, isBank: !!c.isBank,
+    owner: c.owner, type: c.type, capital: c.capital || 0, deposits: c.deposits || 0,
+    revenue: c.revenue || 0, sharesOut: c.sharesOut || 0,
+    total: Math.round(c.capital || 0),
+  })), [companies]);
+
+  const rankingData = useMemo(() => {
+    const people = playerRows.map(p => ({ ...p, kind: 'PLAYER' }));
+    if (rankTab === 'PLAYER') return [...people].sort((a, b) => b.total - a.total);
+    if (rankTab === 'CORP') return [houseRow, ...corpRows].sort((a, b) => b.total - a.total);
+    return [...people, houseRow, ...corpRows].sort((a, b) => b.total - a.total);
+  }, [playerRows, corpRows, houseRow, rankTab]);
 
   // 背景色（下までスクロールしても白くならないように）
   useEffect(() => {
@@ -424,16 +603,18 @@ export default function App() {
 
   const subscribeVip = useCallback(async () => {
     if (vip) return;
-    if (balance < VIP_SUB_PRICE) { showToast('所持金が足りません。', 'error'); return; }
+    const price = vipSubPrice;
+    if (balance < price) { showToast('所持金が足りません。', 'error'); return; }
     try {
       await updateDoc(playerRef(playerName), {
-        balance: increment(-VIP_SUB_PRICE),
+        balance: increment(-price),
         vipSubUntil: Date.now() + VIP_SUB_MS,
       });
-      showToast('👑 VIP定期購入に加入しました！', 'success');
+      houseShop(price);
+      showToast('👑 VIP定期購入に加入しました！（YUTAPON-CASINO 管轄）', 'success');
       postNews(db, appId, `👑 ${playerName} が VIP会員になりました！`, 'jackpot');
     } catch (e) { showToast('加入に失敗しました。', 'error'); }
-  }, [vip, balance, playerName, playerRef, showToast]);
+  }, [vip, balance, vipSubPrice, playerName, playerRef, showToast]);
 
   const cancelVipSub = useCallback(async () => {
     try {
@@ -451,6 +632,7 @@ export default function App() {
         balance: increment(-item.price),
         [`items.${item.key}`]: increment(1),
       });
+      houseShop(item.price);
       showToast(`${item.icon} ${item.name} を購入しました！`, 'success');
     } catch (e) { showToast('購入に失敗しました。', 'error'); }
   }, [delinq.delinquent, vipActive, balance, playerName, playerRef, showToast]);
@@ -471,11 +653,13 @@ export default function App() {
       const cost = goldPx * n;
       if (balance < cost) { showToast('所持金が足りません。', 'error'); return; }
       await updateDoc(playerRef(playerName), { balance: increment(-cost), gold: increment(n) }).catch(() => { });
+      houseShop(cost);
       showToast(`🥇 金を ${n} 本 購入しました（-${cost.toLocaleString()} G）`, 'success');
     } else {
       if (gold < n) { showToast('保有している金が足りません。', 'error'); return; }
       const got = goldSellPrice(goldPx) * n;
       await updateDoc(playerRef(playerName), { balance: increment(got), gold: increment(-n) }).catch(() => { });
+      houseShop(-got);
       showToast(`🥇 金を ${n} 本 売却しました（+${got.toLocaleString()} G）`, 'success');
     }
   }, [delinq.delinquent, balance, gold, goldPx, playerName, playerRef, showToast]);
@@ -483,20 +667,21 @@ export default function App() {
   const buyVip = useCallback(async () => {
     if (vip) return;
     if (delinq.delinquent) { showToast('延滞中はショップを利用できません。', 'error'); return; }
-    if (balance < VIP_PRICE) { showToast('所持金が足りません。', 'error'); return; }
+    if (balance < vipPrice) { showToast('所持金が足りません。', 'error'); return; }
     try {
       await updateDoc(playerRef(playerName), {
-        balance: increment(-VIP_PRICE),
+        balance: increment(-vipPrice),
         vip: true,
         vipSince: Date.now(),
       });
+      houseShop(vipPrice);
       showToast('👑 VIP会員になりました！ ようこそVIPルームへ。', 'success');
       postNews(db, appId, `👑 ${playerName} が VIP会員になりました！`, 'jackpot');
       setView('MENU');
     } catch (e) {
       showToast('購入に失敗しました。', 'error');
     }
-  }, [vip, delinq.delinquent, balance, playerName, playerRef, showToast]);
+  }, [vip, delinq.delinquent, balance, vipPrice, playerName, playerRef, showToast]);
 
   const vipNewsLeft = useMemo(() => (lastVipNewsAt ? Math.max(0, VIP_NEWS_COOLDOWN - (Date.now() - lastVipNewsAt)) : 0), [lastVipNewsAt, newsTick]);
   const postVipNews = async () => {
@@ -523,63 +708,156 @@ export default function App() {
     } catch (e) { showToast('投稿に失敗しました。', 'error'); }
   };
 
+  const bankBusyRef = useRef(false);
+  const companyDocRef = (id) => doc(db, 'artifacts', appId, 'public', 'data', 'companies', id);
+
+  /** 選んだ銀行の帳簿を動かす。dir=+1 預け入れ / -1 引き出し。実際に動いた額を返す */
+  const bankMove = useCallback(async (amount, dir) => {
+    if (bankId === 'YUTAPON') {
+      if (dir > 0) await houseDeposit(amount); else await houseWithdraw(amount);
+      return amount;
+    }
+    let moved = 0;
+    await runTransaction(db, async (tx) => {
+      const ref = companyDocRef(bankId);
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('gone');
+      const c = snap.data();
+      if (!c.isBank) throw new Error('gone');
+      if (dir > 0) {
+        moved = amount;
+        tx.update(ref, { capital: increment(amount), deposits: increment(amount), updatedAt: Date.now() });
+      } else {
+        const avail = Math.min(amount, Math.max(0, c.deposits || 0), Math.max(0, c.capital || 0));
+        if (avail <= 0) throw new Error('empty');
+        moved = avail;
+        tx.update(ref, { capital: increment(-avail), deposits: increment(-avail), updatedAt: Date.now() });
+      }
+    });
+    return moved;
+  }, [bankId]);
+
+  /** 預金の利息を、その銀行に払わせる。払えた額を返す */
+  const payDepositInterest = useCallback(async (interest) => {
+    if (interest <= 0) return 0;
+    if (bankId === 'YUTAPON') { await houseDepositInterest(interest); return interest; }
+    let paid = 0;
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = companyDocRef(bankId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return;
+        const c = snap.data();
+        const free = bankPayable(c);
+        paid = Math.max(0, Math.min(interest, free));
+        if (paid <= 0) return;
+        tx.update(ref, { capital: increment(-paid), interestPaid: increment(paid), updatedAt: Date.now() });
+      });
+    } catch (e) { paid = 0; }
+    return paid;
+  }, [bankId]);
+
   const handleBankAction = async (action) => {
+    if (bankBusyRef.current) return;
     const amount = parseInt(bankInput, 10);
     if (isNaN(amount) || amount <= 0) { showToast('有効な数値を入力してください。', 'error'); return; }
+    if (bankId !== 'YUTAPON' && !myBank) { showToast('その銀行はもうありません。YUTAPON-BANK に戻してください。', 'error'); return; }
+    bankBusyRef.current = true;
     const docRef = playerRef(playerName);
-    if (action === 'DEPOSIT') {
-      if (balance < amount) { showToast('所持金が足りません！', 'error'); return; }
-      const creditBonus = amount >= 50000 ? 3 : amount >= 10000 ? 1 : 0;
-      await updateDoc(docRef, {
-        balance: increment(-amount),
-        bankBalance: increment(amount),
-        lastInterestTime: Date.now(),
-        ...(creditBonus > 0 ? { creditScore: increment(creditBonus) } : {})
-      });
-      showToast(`🏦 ${amount.toLocaleString()} G 預け入れました。${creditBonus > 0 ? ` 信用度 +${creditBonus}` : ''}`, 'success');
-    } else {
-      if (bankBalance < amount) { showToast('銀行残高が足りません！', 'error'); return; }
-      await updateDoc(docRef, { balance: increment(amount), bankBalance: increment(-amount) });
-      showToast(`🏦 ${amount.toLocaleString()} G 引き出しました。`, 'success');
+    try {
+      if (action === 'DEPOSIT') {
+        if (balance < amount) { showToast('所持金が足りません！', 'error'); return; }
+        await updateBalance(-amount);
+        let moved = 0;
+        try { moved = await bankMove(amount, 1); }
+        catch (e) { await updateBalance(amount).catch(() => { }); showToast('その銀行に預けられませんでした。', 'error'); return; }
+        const creditBonus = amount >= 50000 ? 3 : amount >= 10000 ? 1 : 0;
+        await updateDoc(docRef, {
+          bankBalance: increment(moved),
+          lastInterestTime: Date.now(),
+          ...(acct.lockMs > 0 ? { fixedUntil: Date.now() + acct.lockMs } : {}),
+          ...(creditBonus > 0 ? { creditScore: increment(creditBonus) } : {}),
+        });
+        if (moved < amount) await updateBalance(amount - moved).catch(() => { });
+        showToast(`🏦 ${bankName} に ${moved.toLocaleString()} G 預け入れました。${creditBonus > 0 ? ` 信用度 +${creditBonus}` : ''}`, 'success');
+      } else {
+        if (bankBalance < amount) { showToast('預金残高が足りません！', 'error'); return; }
+        if (acct.lockMs > 0 && Date.now() < fixedUntil) {
+          showToast(`定期預金は あと ${Math.ceil((fixedUntil - Date.now()) / 60000)} 分は引き出せません。`, 'warning');
+          return;
+        }
+        let moved = 0;
+        try { moved = await bankMove(amount, -1); }
+        catch (e) { showToast('銀行に現金がなく、引き出せませんでした。', 'error'); return; }
+        await updateDoc(docRef, { bankBalance: increment(-moved) });
+        await updateBalance(moved);
+        showToast(`🏦 ${moved.toLocaleString()} G 引き出しました。`, 'success');
+      }
+      setBankInput('');
+    } finally { bankBusyRef.current = false; }
+  };
+
+  /** 口座を変える。預金が残っているうちは変えられない（帳簿がずれるため） */
+  const switchAccount = async (nextBankId, nextAcct) => {
+    if (bankBalance > 0 && (nextBankId !== bankId)) {
+      showToast('銀行を変えるには、先に全額引き出してください。', 'warning');
+      return;
     }
-    setBankInput('');
+    if (nextAcct !== acctType && acctType === 'FIXED' && bankBalance > 0 && Date.now() < fixedUntil) {
+      showToast('定期預金の期間中は種類を変えられません。', 'warning');
+      return;
+    }
+    await updateDoc(playerRef(playerName), {
+      bankId: nextBankId, acctType: nextAcct, lastInterestTime: Date.now(),
+      ...(nextAcct === 'FIXED' && bankBalance > 0 ? { fixedUntil: Date.now() + 30 * 60 * 1000 } : {}),
+    });
+    showToast('口座を変更しました。', 'success');
   };
 
   const handleLoan = async () => {
+    if (bankBusyRef.current) return;
     const amount = parseInt(loanInput, 10);
     if (isNaN(amount) || amount <= 0) { showToast('有効な数値を入力してください。', 'error'); return; }
-    const maxLoan = Math.floor(creditScore * 1000);
-    if (maxLoan <= 0) { showToast('信用度が不足していて借入できません。', 'error'); return; }
-    if (loanBalance + amount > maxLoan) {
-      showToast(`上限 ${maxLoan.toLocaleString()} G まで借りられます！`, 'error'); return;
+    if (loanLimit <= 0) { showToast('信用度が不足していて借入できません。', 'error'); return; }
+    if (loanBalance + amount > loanLimit) {
+      showToast(`上限 ${loanLimit.toLocaleString()} G まで借りられます！`, 'error'); return;
     }
-    await updateDoc(playerRef(playerName), {
-      balance: increment(amount),
-      loanBalance: increment(amount),
-      lastLoanTime: Date.now(),
-      creditScore: increment(-5),
-      ...(loanBalance <= 0 ? { loanStartAt: Date.now() } : {}),
-    });
-    showToast(`💰 ${amount.toLocaleString()} G 借入しました。信用度 -5`, 'warning');
-    setLoanInput('');
+    bankBusyRef.current = true;
+    try {
+      await updateDoc(playerRef(playerName), {
+        balance: increment(amount),
+        loanBalance: increment(amount),
+        lastLoanTime: Date.now(),
+        creditScore: increment(-5),
+        ...(loanBalance <= 0 ? { loanStartAt: Date.now() } : {}),
+      });
+      await houseLend(amount);
+      showToast(`💰 ${amount.toLocaleString()} G 借入しました。信用度 -5`, 'warning');
+      setLoanInput('');
+    } finally { bankBusyRef.current = false; }
   };
 
   const handleRepay = async () => {
+    if (bankBusyRef.current) return;
     const amount = parseInt(loanInput, 10);
     if (isNaN(amount) || amount <= 0) { showToast('有効な数値を入力してください。', 'error'); return; }
     if (balance < amount) { showToast('所持金が足りません！', 'error'); return; }
     if (loanBalance < amount) { showToast('返済額がローン残高を超えています！', 'error'); return; }
-    const willClear = loanBalance - amount <= 0;
-    await updateDoc(playerRef(playerName), {
-      balance: increment(-amount),
-      loanBalance: increment(-amount),
-      creditScore: increment(-15),
-      ...(willClear ? { loanStartAt: 0 } : {}),
-    });
-    showToast(willClear
-      ? `✅ ${amount.toLocaleString()} G 返済！ローンを完済しました。`
-      : `✅ ${amount.toLocaleString()} G 返済！信用度 -15`, willClear ? 'success' : 'warning');
-    setLoanInput('');
+    bankBusyRef.current = true;
+    try {
+      const willClear = loanBalance - amount <= 0;
+      await updateDoc(playerRef(playerName), {
+        balance: increment(-amount),
+        loanBalance: increment(-amount),
+        creditScore: increment(-15),
+        ...(willClear ? { loanStartAt: 0 } : {}),
+      });
+      await houseRepay(amount);
+      showToast(willClear
+        ? `✅ ${amount.toLocaleString()} G 返済！ローンを完済しました。`
+        : `✅ ${amount.toLocaleString()} G 返済！信用度 -15`, willClear ? 'success' : 'warning');
+      setLoanInput('');
+    } finally { bankBusyRef.current = false; }
   };
 
   const handleTransfer = async () => {
@@ -610,8 +888,6 @@ export default function App() {
       setTransferTarget(''); setTransferAmount(''); setView('MENU');
     } catch (e) { showToast('送金エラー', 'error'); }
   };
-
-  const emitNews = useCallback((msg, type) => { postNews(db, appId, msg, type); }, []);
 
   const getCreditColor = s => s >= 150 ? 'text-emerald-400' : s >= 100 ? 'text-yellow-400' : s >= 50 ? 'text-orange-400' : 'text-red-400';
   const getCreditLabel = s => s >= 150 ? 'AAA' : s >= 120 ? 'AA' : s >= 100 ? 'A' : s >= 80 ? 'BBB' : s >= 60 ? 'BB' : s >= 40 ? 'B' : 'CCC';
@@ -772,20 +1048,32 @@ export default function App() {
 
                 <div>
                   <p className="text-[11px] text-amber-200/50 uppercase tracking-[0.3em] font-bold mb-3">Work</p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <button onClick={() => setView('SCHOOL')} className="group relative overflow-hidden bg-gradient-to-br from-emerald-900/70 to-teal-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-emerald-400/40 transition-all transform hover:-translate-y-1 text-left">
+                      <div className="absolute -top-4 -right-4 text-emerald-400/10 group-hover:text-emerald-300/20 transition"><BookOpen size={110} /></div>
+                      <span className="bg-black/40 text-emerald-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-emerald-300/20">Academy</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1">学校・塾</h2>
+                      <p className="text-gray-400 text-sm">
+                        {eduLevel > 0 ? `${EDU_NAME[eduLevel]}・高校10校/大学9校/専門4校` : '高校10校・大学9校・専門4校・塾'}
+                      </p>
+                    </button>
                     <button onClick={() => setView('LABOR')} className="group relative overflow-hidden bg-gradient-to-br from-sky-900/70 to-cyan-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-sky-400/40 transition-all transform hover:-translate-y-1 text-left">
                       <div className="absolute -top-4 -right-4 text-sky-400/10 group-hover:text-sky-300/20 transition"><BookOpen size={110} /></div>
-                      <span className="bg-black/40 text-sky-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-sky-300/20">Works</span>
-                      <h2 className="text-xl font-extrabold text-white mb-1">YUTAPON WORKS</h2>
+                      <span className="bg-black/40 text-sky-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-sky-300/20">Work</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1">仕事</h2>
                       <p className="text-gray-400 text-sm">
                         {job ? `${jobLabel(job)}・給料 ${salaryOf(job).toLocaleString()}G` : 'アルバイト14種・資格16種・就職14職'}
                       </p>
                     </button>
-                    <button onClick={() => setView('MINING')} className="group relative overflow-hidden bg-gradient-to-br from-amber-900/70 to-yellow-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-amber-400/40 transition-all transform hover:-translate-y-1 text-left">
-                      <div className="absolute -top-4 -right-4 text-amber-400/10 group-hover:text-amber-300/20 transition"><Pickaxe size={110} /></div>
-                      <span className="bg-black/40 text-amber-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-amber-300/20">Mining</span>
-                      <h2 className="text-xl font-extrabold text-white mb-1">マインスイーパー採掘</h2>
-                      <p className="text-gray-400 text-sm">参加費あり・爆発で没収！最大30,000G</p>
+                    <button onClick={() => setView('CORP')} className="group relative overflow-hidden bg-gradient-to-br from-indigo-900/70 to-slate-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-indigo-400/40 transition-all transform hover:-translate-y-1 text-left">
+                      <div className="absolute -top-4 -right-4 text-indigo-400/10 group-hover:text-indigo-300/20 transition"><Building2 size={110} /></div>
+                      <span className="bg-black/40 text-indigo-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-indigo-300/20">Ventures</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1">起業</h2>
+                      <p className="text-gray-400 text-sm">
+                        {myCompanies.length > 0
+                          ? `${myCompanies.length}社を経営中・総資産 ${myCompanies.reduce((a, c) => a + (c.capital || 0), 0).toLocaleString()}G`
+                          : '会社を作って育てる・企業投資もできる'}
+                      </p>
                     </button>
                   </div>
                 </div>
@@ -793,10 +1081,11 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                   {[
                     { id: 'SHOP', label: 'ショップ', sub: delinq.delinquent ? '延滞中・利用停止' : vipActive ? 'VIP会員です' : '道具・金・VIP券', icon: <ShoppingBag size={20} />, tone: delinq.delinquent ? 'text-red-400' : 'text-amber-300' },
-                    { id: 'BANK', label: 'YUTAPON-BANK', sub: '預金・借入・信用度', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
+                    { id: 'BANK', label: '銀行', sub: '口座を選んで預金・借入', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
                     { id: 'TRANSFER', label: 'オンライン送金', sub: '他プレイヤーへ送金', icon: <Send size={20} />, tone: 'text-sky-300' },
                     { id: 'INVEST', label: '人物株投資', sub: '他プレイヤーに投資', icon: <TrendingUp size={20} />, tone: 'text-cyan-300' },
-                    { id: 'RANKING', label: '長者番付', sub: 'トップ10', icon: <Trophy size={20} />, tone: 'text-amber-300' },
+                    { id: 'RANKING', label: '長者番付', sub: 'プレイヤーと企業', icon: <Trophy size={20} />, tone: 'text-amber-300' },
+                    { id: 'PROFILE', label: 'プロフィール', sub: 'アイコン・タグ・経歴', icon: <BookOpen size={20} />, tone: 'text-sky-300' },
                   ].map(s => (
                     <button key={s.id} onClick={() => { if (s.id === 'SHOP' && delinq.delinquent) { showToast('ローン延滞中のためショップは利用できません。', 'error'); } setView(s.id); }} className="flex items-center justify-between p-4 bg-black/40 hover:bg-black/60 rounded-2xl border border-white/10 hover:border-amber-400/30 transition">
                       <div className="flex items-center gap-3">
@@ -900,23 +1189,52 @@ export default function App() {
           </div>
         )}
 
-        {view === 'SLOT' && <ErrorBoundary onReset={() => setView('MENU')}><SlotMachine balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
-        {view === 'ROULETTE' && <ErrorBoundary onReset={() => setView('MENU')}><RouletteView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
-        {view === 'REDBLACK' && <ErrorBoundary onReset={() => setView('MENU')}><RedBlackView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
+        {view === 'SLOT' && <ErrorBoundary onReset={() => setView('MENU')}><SlotMachine balance={balance} updateBalance={casinoBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
+        {view === 'ROULETTE' && <ErrorBoundary onReset={() => setView('MENU')}><RouletteView balance={balance} updateBalance={casinoBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
+        {view === 'REDBLACK' && <ErrorBoundary onReset={() => setView('MENU')}><RedBlackView balance={balance} updateBalance={casinoBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'POKER' && <ErrorBoundary onReset={() => setView('MENU')}><PokerView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
-        {view === 'RACE' && <ErrorBoundary onReset={() => setView('MENU')}><HorseRacing balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} items={items} useItem={useItem} /></ErrorBoundary>}
+        {view === 'RACE' && <ErrorBoundary onReset={() => setView('MENU')}><HorseRacing balance={balance} updateBalance={casinoBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} items={items} useItem={useItem} /></ErrorBoundary>}
         {view === 'LABOR' && (
           <ErrorBoundary onReset={() => setView('MENU')}>
             <WorkView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
               showToast={showToast} playerName={playerName} emitNews={emitNews}
               job={job} licenses={licenses} jobRecord={jobRecord} workExp={workExp} workCool={workCool}
-              saveWork={saveWork} />
+              saveWork={saveWork} rankingData={rankingData} onGroupWork={onGroupWork}
+              miningBalance={casinoBalance} edu={edu} vip={vipActive}
+              companies={companies} onCorpWork={onCorpWork} items={items} onUseItem={useItem}
+              jobChanges={jobChanges} />
           </ErrorBoundary>
         )}
-        {view === 'MINING' && <ErrorBoundary onReset={() => setView('MENU')}><MiningView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
+        {view === 'SCHOOL' && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <SchoolView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
+              showToast={showToast} playerName={playerName} emitNews={emitNews}
+              edu={edu} licenses={licenses} items={items} workExp={workExp} saveEdu={saveWork}
+              onUseItem={useItem} vip={vipActive} />
+          </ErrorBoundary>
+        )}
+        {view === 'PROFILE' && (
+          <ErrorBoundary onReset={() => { setViewProfile(null); setView('MENU'); }}>
+            <ProfileView balance={balance} onBack={() => { if (viewProfile) { setViewProfile(null); setView('RANKING'); } else setView('MENU'); }}
+              showToast={showToast} playerName={playerName} vip={vipActive} isTop={topPlayer === playerName}
+              job={job} edu={edu} licenses={licenses} workExp={workExp} companies={companies}
+              profile={profile} ownedIcons={ownedIcons} ownedTags={ownedTags} stats={stats}
+              netWorth={balance + bankBalance - loanBalance + gold * GOLD_BASE}
+              onBuyIcon={buyIcon} onBuyTag={buyTag} onSaveProfile={saveProfile}
+              viewing={viewProfile} canSeeDetail={!viewProfile || vipActive} />
+          </ErrorBoundary>
+        )}
+        {view === 'CORP' && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <CorpView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
+              showToast={showToast} playerName={playerName} emitNews={emitNews}
+              licenses={licenses} marketMood={Math.max(-1, Math.min(1, marketProfit / 3000000))}
+              onCorpTax={(t) => houseCorpTax(t)} edu={edu} />
+          </ErrorBoundary>
+        )}
         {view === 'LIFE' && <ErrorBoundary onReset={() => setView('MENU')}><LifeGame balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
-        {view === 'SHOP' && <ErrorBoundary onReset={() => setView('MENU')}><Shop balance={balance} vip={vip} vipSince={vipSince} vipSubUntil={vipSubUntil} vipActive={vipActive} delinquent={delinq.delinquent} delinquentInfo={delinq} items={items} gold={gold} goldPx={goldPx} marketProfit={marketProfit} onBuyVip={buyVip} onSubscribe={subscribeVip} onCancelSub={cancelVipSub} onBuyItem={buyItem} onTradeGold={tradeGold} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
-        {view === 'BLACKJACK' && <ErrorBoundary onReset={() => setView('MENU')}><Blackjack balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
+        {view === 'SHOP' && <ErrorBoundary onReset={() => setView('MENU')}><Shop balance={balance} vip={vip} vipSince={vipSince} vipSubUntil={vipSubUntil} vipActive={vipActive} delinquent={delinq.delinquent} delinquentInfo={delinq} items={items} gold={gold} goldPx={goldPx} marketProfit={marketProfit} vipPrice={vipPrice} vipSubPrice={vipSubPrice} staffOff={staffOff} onBuyVip={buyVip} onSubscribe={subscribeVip} onCancelSub={cancelVipSub} onBuyItem={buyItem} onTradeGold={tradeGold} ownedTags={ownedTags} onBuyTag={buyTag} onBack={() => setView('MENU')} showToast={showToast} /></ErrorBoundary>}
+        {view === 'BLACKJACK' && <ErrorBoundary onReset={() => setView('MENU')}><Blackjack balance={balance} updateBalance={casinoBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} vip={vipActive} /></ErrorBoundary>}
         {view === 'JANKEN' && <ErrorBoundary onReset={() => setView('MENU')}><JankenView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
         {view === 'INVEST' && <ErrorBoundary onReset={() => setView('MENU')}><InvestmentView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')} showToast={showToast} playerName={playerName} emitNews={emitNews} /></ErrorBoundary>}
 
@@ -925,7 +1243,50 @@ export default function App() {
           <div className="p-6 md:p-12 max-w-3xl mx-auto">
             <button onClick={() => setView('MENU')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
             <Panel gold className="p-6 md:p-8">
-              <SectionTitle icon={<Landmark size={28} />} title="YUTAPON-BANK" sub="預金: 30分 +0.1% ／ ローン: 15分 +0.3%" />
+              <SectionTitle icon={<Landmark size={28} />} title="銀行"
+                sub={`${bankName}・${acct.name} ／ 預金 30分 +${(myRate * 100).toFixed(2)}% ／ ローン 15分 +0.3%`} />
+
+              {/* 口座を選ぶ */}
+              <div className="mb-5">
+                <div className="text-[11px] font-black text-gray-400 tracking-widest mb-2">どの銀行に預けますか</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3">
+                  {[{ id: 'YUTAPON', name: 'YUTAPON-BANK', rate: INTEREST_RATE_30MIN, sub: 'グループ直営・資産 ' + bigYen(houseTotal(house)) + ' G', safe: true },
+                  ...companies.filter(c => c.isBank).map(c => ({
+                    id: c.id, name: c.name, rate: c.rate || 0,
+                    sub: `代表 ${c.owner}・支払い余力 ${bankPayable(c).toLocaleString()} G`, safe: bankPayable(c) > 0,
+                  }))].map(b => (
+                    <button key={b.id} onClick={() => switchAccount(b.id, acctType)}
+                      className={`p-3 rounded-2xl border-2 text-left transition ${bankId === b.id ? 'border-emerald-400 bg-emerald-500/10' : 'border-white/10 bg-black/40 hover:border-white/25'}`}>
+                      <div className="flex items-center gap-1.5">
+                        <Landmark size={14} className={bankId === b.id ? 'text-emerald-300' : 'text-gray-500'} />
+                        <span className="font-black text-white text-sm truncate">{b.name}</span>
+                        {b.id !== 'YUTAPON' && <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-400 text-black">BANK</span>}
+                        <span className="ml-auto font-mono text-[12px] font-black text-emerald-300">{(b.rate * 100).toFixed(2)}%</span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 truncate">{b.sub}</div>
+                      {!b.safe && <div className="text-[10px] text-red-400 font-bold">現金が尽きていて利息が止まっています</div>}
+                    </button>
+                  ))}
+                </div>
+                <div className="text-[11px] font-black text-gray-400 tracking-widest mb-2">口座の種類</div>
+                <div className="grid grid-cols-3 gap-2">
+                  {ACCOUNT_TYPES.map(a => (
+                    <button key={a.key} onClick={() => switchAccount(bankId, a.key)}
+                      className={`p-2.5 rounded-2xl border-2 text-left transition ${acctType === a.key ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40 hover:border-white/25'}`}>
+                      <div className="text-lg leading-none mb-0.5">{a.icon}</div>
+                      <div className="font-black text-white text-[12px]">{a.name}</div>
+                      <div className="text-[9px] text-gray-500 leading-tight">{a.desc}</div>
+                    </button>
+                  ))}
+                </div>
+                {bankBalance > 0 && <p className="text-[10px] text-gray-500 mt-1.5">※ 銀行を変えるには先に全額引き出してください。</p>}
+                {acctType === 'FIXED' && fixedUntil > Date.now() && (
+                  <p className="text-[11px] text-amber-300 font-bold mt-1.5">🔒 引き出し可能まで あと {Math.ceil((fixedUntil - Date.now()) / 60000)} 分</p>
+                )}
+                {job?.key === 'BANKER' && (
+                  <p className="text-[11px] text-sky-300 font-bold mt-1.5">🏦 行員特典で金利 +{(bankerRateBonus(job) * 100).toFixed(2)}％／30分</p>
+                )}
+              </div>
               <div className="bg-black/40 p-5 rounded-2xl border border-white/10 mb-4">
                 <div className="flex justify-between items-center mb-2">
                   <span className="text-sm font-bold text-gray-400">信用スコア</span>
@@ -935,7 +1296,7 @@ export default function App() {
                   <div className="h-3 rounded-full bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500 transition-all" style={{ width: `${Math.max(0, Math.min(100, (creditScore / 200) * 100))}%` }} />
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
-                  <div>借入上限: <span className="text-white font-bold">{Math.max(0, Math.floor(creditScore * 1000)).toLocaleString()} G</span></div>
+                  <div>借入上限: <span className="text-white font-bold">{loanLimit.toLocaleString()} G</span>{acct.loanMul !== 1 && <span className="text-emerald-300 font-bold"> ({acct.name} ×{acct.loanMul})</span>}</div>
                   <div>借入残高: <span className="text-red-400 font-bold">{loanBalance.toLocaleString()} G</span></div>
                 </div>
               </div>
@@ -1029,7 +1390,7 @@ export default function App() {
           <div className="p-6 md:p-12 max-w-3xl mx-auto">
             <button onClick={() => setView('MENU')} className="flex items-center gap-2 text-gray-400 hover:text-white mb-8 transition"><ArrowLeft size={20} /> メニューに戻る</button>
             <Panel gold className="p-6 md:p-8">
-              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub="純資産ランキング（所持金＋預金−ローン＋金）・YUTAPON-BANK も参戦" />
+              <SectionTitle icon={<Trophy size={28} />} title="LEADERBOARD" sub="プレイヤーと企業の総資産ランキング。YUTAPON-BANK も参戦" />
               {!vipActive && (
                 <button onClick={() => setView('SHOP')} className="w-full mb-4 p-3 rounded-xl bg-amber-400/5 border border-amber-400/20 text-left hover:bg-amber-400/10 transition">
                   <span className="text-[11px] text-amber-200/80 font-bold flex items-center gap-1.5">
@@ -1037,11 +1398,54 @@ export default function App() {
                   </span>
                 </button>
               )}
+              <div className="grid grid-cols-3 gap-2 mb-4">
+                {[
+                  { k: 'ALL', label: 'すべて', icon: <Trophy size={14} /> },
+                  { k: 'PLAYER', label: 'プレイヤー', icon: <Users size={14} /> },
+                  { k: 'CORP', label: '企業', icon: <Building2 size={14} /> },
+                ].map(t => (
+                  <button key={t.k} onClick={() => setRankTab(t.k)}
+                    className={`py-2.5 rounded-xl font-black text-[13px] border-2 transition flex items-center justify-center gap-1.5
+                      ${rankTab === t.k ? 'border-amber-400 bg-amber-400/15 text-amber-200' : 'border-white/10 bg-black/40 text-gray-400 hover:text-white'}`}>
+                    {t.icon}{t.label}
+                  </button>
+                ))}
+              </div>
+
               <div className="space-y-3">
                 {rankingData.length === 0 ? (
                   <p className="text-center text-gray-500 py-12">プレイヤーがまだ存在しません。</p>
                 ) : rankingData.map((player, index) => {
                   const rankBadge = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}`;
+
+                  if (player.isCompany) {
+                    const ct = corpTypeOf(player.type);
+                    return (
+                      <div key={'c-' + player.name + index}
+                        className={`flex items-center justify-between p-4 rounded-2xl border transition-all
+                          ${player.owner === playerName ? 'bg-indigo-500/10 border-indigo-400/60' : 'bg-black/40 border-white/10'}`}>
+                        <div className="flex items-center gap-4 min-w-0">
+                          <span className="w-8 text-center text-xl font-bold shrink-0">{rankBadge}</span>
+                          <div className="min-w-0">
+                            <span className="font-bold text-lg flex items-center gap-1.5 truncate text-white">
+                              <span className="text-xl">{ct?.icon || '🏢'}</span>{player.name}
+                              {player.isBank && <span className="text-[10px] bg-emerald-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">BANK</span>}
+                              <span className="text-[10px] bg-indigo-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">企業</span>
+                              {player.owner === playerName && <span className="text-[10px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">YOU</span>}
+                            </span>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
+                              <span>{ct?.name || '会社'}</span>
+                              <span>代表:{player.owner}</span>
+                              <span className="text-emerald-400/90">通算売上:{player.revenue.toLocaleString()}G</span>
+                              {player.isBank && <span className="text-sky-300">預かり:{player.deposits.toLocaleString()}G</span>}
+                              {player.sharesOut > 0 && <span className="text-amber-300">発行株:{player.sharesOut.toLocaleString()}</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="font-mono text-lg md:text-xl font-black text-indigo-300 shrink-0">{player.total.toLocaleString()} G</span>
+                      </div>
+                    );
+                  }
 
                   if (player.isBank) {
                     return (
@@ -1052,33 +1456,47 @@ export default function App() {
                             <span className="font-black text-lg flex items-center gap-1.5 text-emerald-300 truncate">
                               <Landmark size={17} className="shrink-0" /> YUTAPON-BANK
                               <span className="text-[10px] bg-emerald-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">BANK</span>
+                              <span className="text-[10px] bg-indigo-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">企業</span>
                             </span>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-400 font-semibold">
-                              <span>預かり資産:{player.deposits.toLocaleString()}G</span>
-                              <span className="text-amber-300">貸出残高:{player.loans.toLocaleString()}G</span>
-                              <span>口座数:{player.accounts}</span>
-                              <span className="text-gray-600">みんなの預金と借金が銀行の資産です</span>
+                              <span>預かり:{player.deposits.toLocaleString()}G</span>
+                              <span className="text-amber-300">貸出:{player.loans.toLocaleString()}G</span>
+                              <span className={player.casinoTake >= 0 ? 'text-emerald-400' : 'text-red-400'}>カジノ収支:{player.casinoTake >= 0 ? '+' : ''}{player.casinoTake.toLocaleString()}G</span>
+                              <span className="text-sky-300">法人税:{player.corpTax.toLocaleString()}G</span>
                             </div>
                           </div>
                         </div>
-                        <span className="font-mono text-lg md:text-xl font-black text-emerald-300 shrink-0">{player.total.toLocaleString()} G</span>
+                        <span className="font-mono text-lg md:text-xl font-black text-emerald-300 shrink-0">{bigYen(player.total)} G</span>
                       </div>
                     );
                   }
 
                   const isSelf = player.name === playerName;
                   const title = jobLabel(player.job);
+                  const pTags = (player.profile?.tags || [])
+                    .map(k => availableTags({
+                      job: player.job, edu: player.edu, licenses: player.licenses,
+                      vip: player.vip, isTop: player.name === topPlayer, companies, name: player.name,
+                      stats: player.stats, netWorth: player.total, ownedTags: player.ownedTags,
+                    }).find(t => t.key === k)).filter(Boolean).slice(0, 3);
+                  const isStaff = player.job?.key === 'BANKER' || player.job?.key === 'CASINOSTAFF';
                   return (
-                    <div key={player.name + index} className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${isSelf ? 'bg-amber-500/10 border-amber-500' : 'bg-black/40 border-white/10'}`}>
-                      <div className="flex items-center gap-4 min-w-0">
+                    <button key={player.name + index} onClick={() => { setViewProfile({ ...player, netWorth: player.total }); setView('PROFILE'); }}
+                      className={`w-full text-left flex items-center justify-between p-4 rounded-2xl border transition-all hover:border-amber-400/50 ${isSelf ? 'bg-amber-500/10 border-amber-500' : 'bg-black/40 border-white/10'}`}>
+                      <div className="flex items-center gap-3 min-w-0">
                         <span className="w-8 text-center text-xl font-bold shrink-0">{rankBadge}</span>
+                        <span className="w-10 h-10 rounded-2xl bg-black/50 border border-white/15 flex items-center justify-center text-xl shrink-0">
+                          {iconOf(player.profile?.icon).icon}
+                        </span>
                         <div className="min-w-0">
-                          <span className={`font-bold text-lg flex items-center gap-1.5 truncate ${isSelf ? 'text-amber-300' : player.vip ? 'text-amber-200' : 'text-white'}`}>
+                          <span className={`font-bold text-lg flex items-center gap-1.5 flex-wrap ${isSelf ? 'text-amber-300' : player.vip ? 'text-amber-200' : 'text-white'}`}>
                             {player.name}
                             {player.name === topPlayer && <TopBadge size="xs" />}
                             {player.vip && <VipBadge size="xs" />}
+                            {isStaff && <span className="text-[10px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">YUTA職員</span>}
                             {isSelf && <span className="text-[10px] bg-amber-400 text-black px-1.5 py-0.5 rounded font-black">YOU</span>}
                           </span>
+                          {pTags.length > 0 && <div className="flex flex-wrap gap-1 my-0.5"><TagChips tags={pTags} /></div>}
                           {title && <div className="text-[11px] font-bold text-sky-300/90 truncate">{title}</div>}
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
                             <span>手元:{player.balance.toLocaleString()}G</span>
@@ -1096,7 +1514,7 @@ export default function App() {
                         </div>
                       </div>
                       <span className="font-mono text-lg md:text-xl font-black text-amber-300 shrink-0">{player.total.toLocaleString()} G</span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -1445,241 +1863,6 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
 /* ==========================================================
    マインスイーパー採掘
    ========================================================== */
-function MiningView({ balance, updateBalance, onBack, showToast, playerName, emitNews }) {
-  const [phase, setPhase] = useState('SELECT');
-  const [levelIdx, setLevelIdx] = useState(null);
-  const [board, setBoard] = useState([]);
-  const [revealed, setRevealed] = useState([]);
-  const [flagged, setFlagged] = useState([]);
-  const [result, setResult] = useState(null);
-  const [exploded, setExploded] = useState(null);
-  const [safeCount, setSafeCount] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-  const timerRef = useRef(null);
-  const busyRef = useRef(false);
-
-  const lvl = levelIdx !== null ? MINE_LEVELS[levelIdx] : null;
-  const totalSafe = lvl ? lvl.rows * lvl.cols - lvl.mines : 0;
-
-  useEffect(() => () => clearInterval(timerRef.current), []);
-  useEffect(() => {
-    if (phase !== 'PLAYING') { clearInterval(timerRef.current); return; }
-    timerRef.current = setInterval(() => setElapsed(t => t + 1), 1000);
-    return () => clearInterval(timerRef.current);
-  }, [phase]);
-
-  const generateBoard = (rows, cols, mines, firstRow, firstCol) => {
-    const cells = Array(rows * cols).fill(0);
-    const safeZone = new Set();
-    for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-      const r = firstRow + dr, c = firstCol + dc;
-      if (r >= 0 && r < rows && c >= 0 && c < cols) safeZone.add(r * cols + c);
-    }
-    let placed = 0, guard = 0;
-    const maxMines = Math.min(mines, rows * cols - safeZone.size);
-    while (placed < maxMines && guard < 100000) {
-      guard++;
-      const idx = Math.floor(Math.random() * rows * cols);
-      if (cells[idx] !== -1 && !safeZone.has(idx)) { cells[idx] = -1; placed++; }
-    }
-    for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
-      const idx = r * cols + c;
-      if (cells[idx] === -1) continue;
-      let count = 0;
-      for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-        const nr = r + dr, nc = c + dc;
-        if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && cells[nr * cols + nc] === -1) count++;
-      }
-      cells[idx] = count;
-    }
-    return cells;
-  };
-
-  const expandEmpty = (b, revArr, row, col, rows, cols) => {
-    const queue = [[row, col]];
-    const visited = new Set();
-    while (queue.length) {
-      const [r, c] = queue.shift();
-      const idx = r * cols + c;
-      if (visited.has(idx)) continue;
-      visited.add(idx);
-      if (b[idx] === -1) continue;
-      revArr[idx] = true;
-      if (b[idx] === 0) {
-        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
-          const nr = r + dr, nc = c + dc;
-          if (nr >= 0 && nr < rows && nc >= 0 && nc < cols && !revArr[nr * cols + nc]) queue.push([nr, nc]);
-        }
-      }
-    }
-    return revArr;
-  };
-
-  const startGame = async (idx) => {
-    const L = MINE_LEVELS[idx];
-    if (busyRef.current) return;
-    if (balance < L.cost) { showToast(`参加費 ${L.cost.toLocaleString()} G が足りません！`, 'error'); return; }
-    busyRef.current = true;
-    try { await updateBalance(-L.cost); } catch (e) { busyRef.current = false; return; }
-    busyRef.current = false;
-    setLevelIdx(idx);
-    setBoard([]);
-    setRevealed(Array(L.rows * L.cols).fill(false));
-    setFlagged(Array(L.rows * L.cols).fill(false));
-    setResult(null); setExploded(null); setSafeCount(0); setElapsed(0);
-    setPhase('PLAYING');
-    showToast(`${L.label} 開始！参加費 -${L.cost.toLocaleString()} G`, 'warning');
-  };
-
-  const handleCellClick = async (row, col) => {
-    if (phase !== 'PLAYING' || result || !lvl) return;
-    const idx = row * lvl.cols + col;
-    if (revealed[idx] || flagged[idx]) return;
-
-    let cur = board;
-    if (cur.length === 0) {
-      cur = generateBoard(lvl.rows, lvl.cols, lvl.mines, row, col);
-      setBoard(cur);
-    }
-
-    if (cur[idx] === -1) {
-      clearInterval(timerRef.current);
-      const rev = [...revealed]; rev[idx] = true;
-      setRevealed(rev); setExploded(idx); setResult('LOSE'); setPhase('RESULT');
-      showToast('💥 爆発！参加費は没収です', 'error');
-      if (lvl.label === '地獄坑道') emitNews(`💥 ${playerName} が${lvl.label}で爆発…`, 'loss');
-      return;
-    }
-
-    const rev = expandEmpty(cur, [...revealed], row, col, lvl.rows, lvl.cols);
-    setRevealed(rev);
-    const opened = rev.filter(Boolean).length;
-    setSafeCount(opened);
-
-    if (opened >= totalSafe) {
-      clearInterval(timerRef.current);
-      setResult('WIN'); setPhase('RESULT');
-      try { await updateBalance(lvl.reward); } catch (e) { /* noop */ }
-      showToast(`⛏️ 採掘成功！+${lvl.reward.toLocaleString()} G`, 'success');
-      if (lvl.label === '地獄坑道') emitNews(`⛏️ ${playerName} が${lvl.label}の採掘に成功！${lvl.reward.toLocaleString()} G 獲得！`, 'mining');
-    }
-  };
-
-  const handleRightClick = (e, row, col) => {
-    e.preventDefault();
-    if (phase !== 'PLAYING' || result || !lvl) return;
-    const idx = row * lvl.cols + col;
-    if (revealed[idx]) return;
-    setFlagged(prev => { const n = [...prev]; n[idx] = !n[idx]; return n; });
-  };
-
-  const numberColors = ['', 'text-blue-500', 'text-emerald-600', 'text-red-500', 'text-purple-600', 'text-red-700', 'text-cyan-600', 'text-black', 'text-gray-500'];
-  const progress = totalSafe > 0 ? (safeCount / totalSafe) * 100 : 0;
-
-  return (
-    <div className="p-4 md:p-6 max-w-5xl mx-auto">
-      <div className="w-full flex flex-wrap gap-3 justify-between items-center mb-6">
-        <button onClick={() => { clearInterval(timerRef.current); onBack(); }} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
-        {phase === 'PLAYING' && lvl && (
-          <div className="flex items-center gap-4 text-sm">
-            <span className={`font-bold ${lvl.color}`}>{lvl.label}</span>
-            <span className="text-gray-400 font-mono">⏱ {elapsed}秒</span>
-            <span className="text-amber-300 font-mono font-bold">{safeCount}/{totalSafe}</span>
-            <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-amber-300 font-bold">{balance.toLocaleString()} G</div>
-          </div>
-        )}
-      </div>
-
-      {phase === 'SELECT' && (
-        <div>
-          <div className="text-center mb-8">
-            <h2 className="text-3xl md:text-4xl font-black text-white mb-2 flex items-center justify-center gap-3"><Pickaxe size={34} className="text-amber-400" /> マインスイーパー採掘</h2>
-            <p className="text-gray-400">地雷を避けて安全なマスを全て掘ればクリア。爆発すると参加費は没収。</p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {MINE_LEVELS.map((lv, i) => (
-              <button key={i} onClick={() => startGame(i)} disabled={balance < lv.cost}
-                className={`p-6 rounded-2xl border-2 text-left transition-all hover:-translate-y-1 disabled:opacity-40 disabled:cursor-not-allowed ${lv.bg}`}>
-                <div className="flex items-center gap-3 mb-3">
-                  <span className="text-3xl">{lv.icon}</span>
-                  <div>
-                    <span className={`text-xl font-black ${lv.color}`}>{lv.label}</span>
-                    <div className="text-gray-500 text-[11px]">{lv.rows}×{lv.cols} / 地雷{lv.mines}個</div>
-                  </div>
-                </div>
-                <div className="flex justify-between items-center">
-                  <div><div className="text-gray-400 text-[11px]">参加費</div><div className="text-red-400 font-black text-lg">-{lv.cost.toLocaleString()} G</div></div>
-                  <div className="text-right"><div className="text-gray-400 text-[11px]">クリア報酬</div><div className={`font-black text-2xl ${lv.color}`}>+{lv.reward.toLocaleString()} G</div></div>
-                </div>
-                <div className="text-[11px] text-gray-600 mt-2">地雷密度 {Math.round((lv.mines / (lv.rows * lv.cols)) * 100)}%</div>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {phase === 'PLAYING' && lvl && (
-        <div className="flex flex-col items-center">
-          <div className="w-full max-w-2xl mb-4">
-            <div className="flex justify-between text-[11px] text-gray-400 mb-1"><span>採掘進捗</span><span>{Math.round(progress)}%</span></div>
-            <div className="w-full bg-white/10 rounded-full h-2">
-              <div className="h-2 rounded-full bg-gradient-to-r from-amber-500 to-yellow-300 transition-all" style={{ width: `${progress}%` }} />
-            </div>
-          </div>
-          <Panel className="p-3 overflow-auto max-w-full">
-            <div style={{ display: 'grid', gridTemplateColumns: `repeat(${lvl.cols}, minmax(0,1fr))`, gap: 2 }}>
-              {Array(lvl.rows * lvl.cols).fill(0).map((_, idx) => {
-                const row = Math.floor(idx / lvl.cols), col = idx % lvl.cols;
-                const isRev = revealed[idx], isFlag = flagged[idx];
-                const num = board.length ? board[idx] : 0;
-                return (
-                  <button key={idx} onClick={() => handleCellClick(row, col)} onContextMenu={e => handleRightClick(e, row, col)}
-                    className={`w-8 h-8 md:w-9 md:h-9 flex items-center justify-center text-xs md:text-sm font-black rounded transition select-none ${isRev ? 'bg-slate-200' : 'bg-slate-600 hover:bg-slate-500 border border-slate-500'}`}>
-                    {isFlag && !isRev ? '🚩' : isRev && num > 0 ? <span className={numberColors[num]}>{num}</span> : ''}
-                  </button>
-                );
-              })}
-            </div>
-          </Panel>
-          <div className="mt-4 text-[11px] text-gray-500 text-center">
-            右クリック（モバイルは長押し）でフラグ ／ 残りフラグ {lvl.mines - flagged.filter(Boolean).length} 個
-          </div>
-        </div>
-      )}
-
-      {phase === 'RESULT' && lvl && (
-        <div className="text-center max-w-md mx-auto">
-          <Panel gold className={`p-10 mb-6 ${result === 'WIN' ? '' : 'border-red-500/50'}`}>
-            <div className="text-6xl mb-4">{result === 'WIN' ? '⛏️' : '💥'}</div>
-            <h3 className={`text-3xl font-black mb-2 ${result === 'WIN' ? 'text-amber-300' : 'text-red-400'}`}>{result === 'WIN' ? '採掘成功！' : '爆発！！'}</h3>
-            <p className="text-gray-400 mb-4">{lvl.label} / {elapsed}秒</p>
-            {result === 'WIN'
-              ? <div className="text-4xl font-black text-emerald-400">+{lvl.reward.toLocaleString()} G</div>
-              : <div className="text-2xl font-black text-red-400">参加費 {lvl.cost.toLocaleString()} G 没収</div>}
-          </Panel>
-
-          {board.length > 0 && (
-            <Panel className="p-3 mb-6 overflow-auto">
-              <p className="text-[11px] text-gray-500 mb-2">地雷の配置</p>
-              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${lvl.cols}, minmax(0,1fr))`, gap: 2 }}>
-                {board.map((cell, idx) => (
-                  <div key={idx} className={`w-6 h-6 flex items-center justify-center text-[10px] font-black rounded ${idx === exploded ? 'bg-red-600' : cell === -1 ? 'bg-slate-800 text-red-400' : revealed[idx] ? 'bg-slate-300 text-slate-700' : 'bg-slate-600 text-slate-400'}`}>
-                    {idx === exploded ? '💥' : cell === -1 ? '💣' : revealed[idx] && cell > 0 ? cell : ''}
-                  </div>
-                ))}
-              </div>
-            </Panel>
-          )}
-
-          <div className="flex gap-4">
-            <button onClick={() => { setPhase('SELECT'); setLevelIdx(null); }} className="flex-1 bg-white/10 hover:bg-white/20 text-white py-4 rounded-xl font-bold transition">レベル選択へ</button>
-            <GoldButton onClick={() => startGame(levelIdx)} disabled={balance < lvl.cost} className="flex-1 py-4">{result === 'WIN' ? 'もう一度！' : 'リベンジ！'}</GoldButton>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
 
 /* ==========================================================
    オンラインじゃんけん

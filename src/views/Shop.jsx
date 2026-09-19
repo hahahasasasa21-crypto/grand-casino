@@ -3,16 +3,24 @@ import { ArrowLeft, ShoppingBag, Check, Lock, TrendingUp, TrendingDown, AlertTri
 import { Panel, GoldButton, VipBadge } from '../shared/ui';
 import {
   VIP_PRICE, VIP_PERKS, VIP_SUB_PRICE, VIP_SUB_DAYS,
-  ITEM_LIST, GOLD_BASE, goldSellPrice,
+  ITEM_LIST, GOLD_BASE, goldSellPrice, TAG_ITEMS,
 } from '../shared/vip';
 
 const fmt = (n) => (n || 0).toLocaleString();
 
 export default function Shop({
+  vipPrice: vipPriceProp, vipSubPrice: vipSubProp, staffOff = 0,
   balance, vip, vipSince, vipSubUntil, vipActive, delinquent, delinquentInfo,
-  items = {}, gold = 0, goldPx = GOLD_BASE, marketProfit = 0,
-  onBuyVip, onSubscribe, onCancelSub, onBuyItem, onTradeGold, onBack, showToast,
+  items = {}, gold = 0, goldPx = GOLD_BASE, marketProfit = 0, ownedTags = [],
+  onBuyVip, onSubscribe, onCancelSub, onBuyItem, onTradeGold, onBuyTag, onBack, showToast,
 }) {
+  const VIP_P = vipPriceProp ?? VIP_PRICE;
+  const VIP_SUB_P = vipSubProp ?? VIP_SUB_PRICE;
+  const StaffNote = () => (staffOff > 0 ? (
+    <div className="mb-3 px-3 py-2 rounded-xl bg-amber-400/10 border border-amber-400/30 text-[11px] font-bold text-amber-200">
+      🎰 YUTAPON-CASINO 職員特典：VIP 券が {Math.round(staffOff * 100)}％引きになっています
+    </div>
+  ) : null);
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState(null);
   const [goldQty, setGoldQty] = useState(1);
@@ -188,7 +196,43 @@ export default function Shop({
         })}
       </div>
 
-      {/* ===== VIP券（買い切り） ===== */}
+      {/* ===== 称号（名前の横につくタグ）｜買い切り・VIP限定 ===== */}
+      <div className="mb-4">
+        <p className="text-[11px] text-amber-200/60 uppercase tracking-[0.25em] font-bold mb-2">Title</p>
+        <div className="grid md:grid-cols-2 gap-3">
+          {TAG_ITEMS.map(t => {
+            const owned = (ownedTags || []).includes(t.key);
+            const locked = t.vipOnly && !vipActive;
+            return (
+              <Panel key={t.key} gold className={`p-4 ${locked ? 'opacity-70' : ''}`}>
+                <div className="flex items-start gap-3">
+                  <span className="text-3xl leading-none">{t.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <h4 className="font-black text-white">{t.name}</h4>
+                      {t.vipOnly && <VipBadge size="xs" />}
+                      {owned && <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">所持済み</span>}
+                    </div>
+                    <p className="text-[11px] text-gray-400 leading-snug mt-0.5">
+                      名前の横に <span className="font-black" style={{ color: t.color }}>{t.label}</span> を付けられるようになります。プロフィールのタグから選んでください。
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="font-mono font-black text-amber-300">{fmt(t.price)}</div>
+                    <button onClick={() => onBuyTag && onBuyTag(t)} disabled={busy || locked || owned || balance < t.price}
+                      className="mt-1 px-3 py-1.5 rounded-lg text-xs font-black bg-amber-400 text-black hover:brightness-110 disabled:opacity-30 disabled:cursor-not-allowed">
+                      {owned ? '所持済み' : locked ? <span className="flex items-center gap-1"><Lock size={10} />VIP限定</span> : '購入'}
+                    </button>
+                  </div>
+                </div>
+              </Panel>
+            );
+          })}
+        </div>
+      </div>
+
+      <StaffNote />
+      {/* ===== VIP券（買い切り）｜YUTAPON-CASINO 管轄 ===== */}
       <Panel gold className="p-0 overflow-hidden mb-4">
         <div className="relative p-6" style={{ background: 'linear-gradient(135deg, rgba(120,75,10,0.55) 0%, rgba(40,25,5,0.5) 55%, rgba(12,8,2,0.5) 100%)' }}>
           <div className="absolute inset-0 opacity-[0.12] pointer-events-none" style={{
@@ -199,13 +243,14 @@ export default function Shop({
               <div className="flex items-center gap-2 mb-1">
                 <VipBadge size="lg" />
                 <h3 className="text-2xl font-black text-white">VIP券</h3>
+                <p className="text-[10px] font-black tracking-widest text-amber-200/60">YUTAPON-CASINO 管轄</p>
                 <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-white/10 text-gray-300 border border-white/15">買い切り</span>
               </div>
               <p className="text-sm text-amber-100/70">一度買えばずっと使える、YUTAPON CASINO の特別会員証です。</p>
             </div>
             <div className="text-right">
               <div className="text-[10px] text-gray-400 font-bold tracking-widest">PRICE</div>
-              <div className="font-mono text-3xl font-black text-amber-300">{fmt(VIP_PRICE)}<span className="text-base ml-1">G</span></div>
+              <div className="font-mono text-3xl font-black text-amber-300">{fmt(VIP_P)}<span className="text-base ml-1">G</span></div>
             </div>
           </div>
 
@@ -234,10 +279,10 @@ export default function Shop({
               </div>
             ) : (
               <>
-                <GoldButton onClick={() => run('vip', onBuyVip)} disabled={busy || balance < VIP_PRICE} className="w-full py-4 text-lg">
-                  {busy ? '購入中…' : confirm === 'vip' ? `本当に ${fmt(VIP_PRICE)} G で購入しますか？（もう一度押す）` : `${fmt(VIP_PRICE)} G で購入する`}
+                <GoldButton onClick={() => run('vip', onBuyVip)} disabled={busy || balance < VIP_P} className="w-full py-4 text-lg">
+                  {busy ? '購入中…' : confirm === 'vip' ? `本当に ${fmt(VIP_P)} G で購入しますか？（もう一度押す）` : `${fmt(VIP_P)} G で購入する`}
                 </GoldButton>
-                {balance < VIP_PRICE && <p className="text-[11px] text-red-400 mt-2 text-center">あと {fmt(VIP_PRICE - balance)} G 足りません。</p>}
+                {balance < VIP_P && <p className="text-[11px] text-red-400 mt-2 text-center">あと {fmt(VIP_P - balance)} G 足りません。</p>}
               </>
             )}
           </div>
@@ -255,7 +300,7 @@ export default function Shop({
                 <VipBadge size="xs" />
               </div>
               <p className="text-[11px] text-gray-400">
-                {VIP_SUB_DAYS}日ごとに {fmt(VIP_SUB_PRICE)} G。期限が来ると自動で更新され、所持金が足りないときは自動で解約されます。
+                {VIP_SUB_DAYS}日ごとに {fmt(VIP_SUB_P)} G。期限が来ると自動で更新され、所持金が足りないときは自動で解約されます。
               </p>
               {vipSubUntil > Date.now() && (
                 <p className="text-[11px] text-emerald-300 font-bold mt-0.5">
@@ -272,8 +317,8 @@ export default function Shop({
               {confirm === 'cancel' ? '本当に解約しますか？' : '解約する'}
             </button>
           ) : (
-            <GoldButton onClick={() => run('sub', onSubscribe)} disabled={busy || balance < VIP_SUB_PRICE} className="px-6 py-2.5">
-              {confirm === 'sub' ? 'もう一度押して確定' : `${fmt(VIP_SUB_PRICE)} G で加入`}
+            <GoldButton onClick={() => run('sub', onSubscribe)} disabled={busy || balance < VIP_SUB_P} className="px-6 py-2.5">
+              {confirm === 'sub' ? 'もう一度押して確定' : `${fmt(VIP_SUB_P)} G で加入`}
             </GoldButton>
           )}
         </div>

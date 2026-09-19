@@ -14,6 +14,10 @@ export const GAMES = {
   MEMORY: { key: 'MEMORY', name: '記憶', icon: '🧠', desc: '並びを覚えて同じ順に押す' },
   SORT: { key: 'SORT', name: '仕分け', icon: '📦', desc: '品物を正しい箱へ入れる' },
   INSPECT: { key: 'INSPECT', name: '検品', icon: '🔍', desc: 'ひとつだけ違うものを探す' },
+  LOAN: { key: 'LOAN', name: '融資審査', icon: '🏦', desc: '申込書を読み、貸すか断るかを決める' },
+  FRAUD: { key: 'FRAUD', name: '不正検知', icon: '🕵️', desc: '配当が合っていない記録を見つける' },
+  CHOICE: { key: 'CHOICE', name: '筆記試験', icon: '📝', desc: '4つの選択肢から正解を選ぶ' },
+  FLASH: { key: 'FLASH', name: 'フラッシュ暗算', icon: '⚡', desc: '一瞬ずつ光る数字を足していく' },
 };
 export const gameOf = (k) => GAMES[k] || GAMES.WORD;
 
@@ -51,7 +55,14 @@ export const LICENSES = [
   { key: 'TEACH', name: '教員免許', icon: '🎓', fee: 20000, game: 'WORD', diff: 4, pass: 0.85, req: ['ENG'], desc: '学校で教えるための免許。' },
   { key: 'ARCH', name: '建築士', icon: '📐', fee: 25000, game: 'MEMORY', diff: 4, pass: 0.85, req: ['QC'], desc: '建物を設計できる国家資格。' },
   { key: 'PILOT', name: '操縦士免許', icon: '✈️', fee: 55000, game: 'INSPECT', diff: 5, pass: 0.9, req: ['QC', 'MEMO'], desc: '旅客機を操縦できる免許。' },
-  { key: 'DOC', name: '医師免許', icon: '🩺', fee: 60000, game: 'MEMORY', diff: 5, pass: 0.9, req: ['MEMO', 'QC'], desc: '医療行為を行える国家資格。' },
+  {
+    key: 'DOC', name: '医師免許', icon: '🩺', fee: 60000, game: 'MEMORY', diff: 5, pass: 0.9, req: ['MEMO', 'QC'],
+    desc: '医療行為を行える国家資格。【2次試験まである最難関】',
+    stages: [
+      { game: 'MEMORY', diff: 5, pass: 0.9, name: '1次：記憶試験（激ムズ）' },
+      { game: 'INSPECT', diff: 5, pass: 0.85, cols: 9, rounds: 6, name: '2次：所見の読影（超広範囲）' },
+    ],
+  },
   { key: 'LAW', name: '弁護士資格', icon: '⚖️', fee: 60000, game: 'WORD', diff: 5, pass: 0.9, req: ['TEACH'], desc: '法廷に立てる資格。最難関のひとつ。' },
   { key: 'PHD', name: '博士号', icon: '🔬', fee: 80000, game: 'WORD', diff: 5, pass: 0.9, req: ['TEACH', 'ARCH'], desc: '研究者として認められた証。' },
 ];
@@ -68,77 +79,109 @@ export const RANKS = [
   { name: '役員', mult: 4.80, exp: 3300 },
 ];
 
-/* ---------- 就職できる仕事 ---------- */
+/* ---------- 学歴のレベル ---------- */
+export const EDU = { NONE: 0, HIGH: 1, VOC: 2, UNI: 3 };
+export const EDU_LABEL = ['学歴不問', '高卒以上', '専門卒以上', '大卒以上'];
+
+/* ---------- 就職できる仕事 ----------
+   eduReq … 必要な学歴　volatile … 出来ばえで報酬が大きく化ける仕事
+   group  … YUTAPON グループ（給料6倍・経験10倍） */
 export const CAREERS = [
   {
-    key: 'SALES', name: '販売スタッフ', icon: '🛍️', field: '小売',
+    key: 'SALES', name: '販売スタッフ', icon: '🛍️', field: '小売', eduReq: 0,
     req: [], minWorkExp: 120, salary: 380, shiftPay: 1300, shift: { game: 'MEMORY', diff: 2 },
     exam: { game: 'MEMORY', diff: 2, pass: 0.6 }, desc: '店頭に立ち、客の要望を覚えて応える。',
   },
   {
-    key: 'CLERK', name: '事務員', icon: '🗂️', field: '事務',
-    req: ['TYPE'], minWorkExp: 0, salary: 450, shiftPay: 1500, shift: { game: 'TYPING', diff: 2 },
-    exam: { game: 'TYPING', diff: 3, pass: 0.65 }, desc: '書類作成とデータ管理。まずはここから。',
+    key: 'CLERK', name: '事務員', icon: '🗂️', field: '事務', eduReq: 1,
+    req: ['TYPE'], minWorkExp: 0, salary: 520, shiftPay: 1600, shift: { game: 'TYPING', diff: 2 },
+    exam: { game: 'TYPING', diff: 3, pass: 0.65 }, desc: '書類作成とデータ管理。高卒から入れる。',
   },
   {
-    key: 'SECURITY', name: '警備主任', icon: '🛡️', field: '警備',
-    req: ['QC'], minWorkExp: 150, salary: 600, shiftPay: 2000, shift: { game: 'INSPECT', diff: 3 },
+    key: 'SECURITY', name: '警備主任', icon: '🛡️', field: '警備', eduReq: 1,
+    req: ['QC'], minWorkExp: 150, salary: 680, shiftPay: 2100, shift: { game: 'INSPECT', diff: 3 },
     exam: { game: 'INSPECT', diff: 3, pass: 0.7 }, desc: '施設の監視と巡回の責任者。',
   },
   {
-    key: 'ACCOUNT', name: '経理', icon: '📒', field: '財務',
-    req: ['BOOK'], minWorkExp: 200, salary: 750, shiftPay: 2400, shift: { game: 'CALC', diff: 3 },
+    key: 'CIVIL', name: '公務員', icon: '🏛️', field: '官公庁', eduReq: 1, uniBonus: 1.6, steady: true,
+    req: [], minWorkExp: 260, salary: 900, shiftPay: 2600, shift: { game: 'SORT', diff: 3 },
+    exam: { game: 'CHOICE', diff: 3, pass: 0.72 },
+    desc: '窓口と事務。安定していて景気に左右されない。',
+    perk: '大卒だと給料が1.6倍になる',
+  },
+  {
+    key: 'ACCOUNT', name: '経理', icon: '📒', field: '財務', eduReq: 2, calcJob: true,
+    req: ['BOOK'], minWorkExp: 200, salary: 1100, shiftPay: 3000, shift: { game: 'CALC', diff: 3 },
     exam: { game: 'CALC', diff: 4, pass: 0.7 }, desc: '会社のお金の流れを管理する。',
   },
   {
-    key: 'DEALERJOB', name: 'カジノディーラー', icon: '🃏', field: 'カジノ',
-    req: ['DEALER'], minWorkExp: 250, salary: 900, shiftPay: 2900, shift: { game: 'CALC', diff: 4 },
+    key: 'DEALERJOB', name: 'カジノディーラー', icon: '🃏', field: 'カジノ', eduReq: 2, calcJob: true,
+    req: ['DEALER'], minWorkExp: 250, salary: 1300, shiftPay: 3400, shift: { game: 'CALC', diff: 4 },
     exam: { game: 'CALC', diff: 4, pass: 0.75 }, desc: 'YUTAPON CASINO のテーブルを仕切る。',
   },
   {
-    key: 'CHEF', name: '調理師', icon: '🍳', field: '飲食',
-    req: ['COOK'], minWorkExp: 250, salary: 850, shiftPay: 2700, shift: { game: 'SORT', diff: 4 },
+    key: 'CHEF', name: '調理師', icon: '🍳', field: '飲食', eduReq: 2,
+    req: ['COOK'], minWorkExp: 250, salary: 1250, shiftPay: 3300, shift: { game: 'SORT', diff: 4 },
     exam: { game: 'SORT', diff: 4, pass: 0.72 }, desc: '厨房を預かり、段取りで勝負する。',
   },
   {
-    key: 'TEACHER', name: '教師', icon: '🏫', field: '教育',
-    req: ['TEACH'], minWorkExp: 300, salary: 1000, shiftPay: 3100, shift: { game: 'WORD', diff: 4 },
-    exam: { game: 'WORD', diff: 4, pass: 0.75 }, desc: '教壇に立ち、生徒を送り出す。',
+    key: 'TEACHER', name: '教師', icon: '🏫', field: '教育', eduReq: 3,
+    req: ['TEACH'], minWorkExp: 300, salary: 2100, shiftPay: 4600, shift: { game: 'WORD', diff: 4 },
+    exam: { game: 'CHOICE', diff: 4, pass: 0.75 }, desc: '教壇に立ち、生徒を送り出す。',
   },
   {
-    key: 'CODER', name: 'プログラマー', icon: '💻', field: 'IT',
-    req: ['IT'], minWorkExp: 300, salary: 1250, shiftPay: 3800, shift: { game: 'TYPING', diff: 4 },
+    key: 'CODER', name: 'プログラマー', icon: '💻', field: 'IT', eduReq: 3,
+    req: ['IT'], minWorkExp: 300, salary: 2600, shiftPay: 5400, shift: { game: 'TYPING', diff: 4 },
     exam: { game: 'TYPING', diff: 4, pass: 0.75 }, desc: 'システムを書いて世界を動かす。',
   },
   {
-    key: 'ARCHITECT', name: '建築士', icon: '📐', field: '建設',
-    req: ['ARCH'], minWorkExp: 400, salary: 1400, shiftPay: 4200, shift: { game: 'MEMORY', diff: 4 },
+    key: 'ARCHITECT', name: '建築士', icon: '📐', field: '建設', eduReq: 3,
+    req: ['ARCH'], minWorkExp: 400, salary: 2900, shiftPay: 5800, shift: { game: 'MEMORY', diff: 4 },
     exam: { game: 'MEMORY', diff: 4, pass: 0.78 }, desc: '図面を引き、街をつくる。',
   },
   {
-    key: 'TRADER', name: '証券トレーダー', icon: '📈', field: '金融',
-    req: ['SEC'], minWorkExp: 450, salary: 1600, shiftPay: 4800, shift: { game: 'CALC', diff: 5 },
-    exam: { game: 'CALC', diff: 5, pass: 0.8 }, desc: '一瞬の判断で数字を積み上げる。',
+    key: 'TRADER', name: '証券トレーダー', icon: '📈', field: '金融', eduReq: 3, volatile: true, calcJob: true,
+    req: ['SEC'], minWorkExp: 450, salary: 3200, shiftPay: 6400, shift: { game: 'CALC', diff: 5 },
+    exam: { game: 'CALC', diff: 5, pass: 0.8 },
+    desc: '一瞬の判断で数字を積み上げる。出来が悪い日はほぼ無給。',
+    perk: '出来ばえで報酬が激変（最大 2.45 倍、失敗すればほぼゼロ）',
   },
   {
-    key: 'PILOTJOB', name: 'パイロット', icon: '✈️', field: '航空',
-    req: ['PILOT'], minWorkExp: 600, salary: 1900, shiftPay: 5600, shift: { game: 'INSPECT', diff: 5 },
+    key: 'PILOTJOB', name: 'パイロット', icon: '✈️', field: '航空', eduReq: 3,
+    req: ['PILOT'], minWorkExp: 600, salary: 3800, shiftPay: 7200, shift: { game: 'INSPECT', diff: 5 },
     exam: { game: 'INSPECT', diff: 5, pass: 0.82 }, desc: '何百人の命を預かって空を飛ぶ。',
   },
   {
-    key: 'DOCTOR', name: '医師', icon: '🩺', field: '医療',
-    req: ['DOC'], minWorkExp: 700, salary: 2200, shiftPay: 6400, shift: { game: 'MEMORY', diff: 5 },
+    key: 'DOCTOR', name: '医師', icon: '🩺', field: '医療', eduReq: 3,
+    req: ['DOC'], minWorkExp: 700, salary: 4400, shiftPay: 8200, shift: { game: 'MEMORY', diff: 5 },
     exam: { game: 'MEMORY', diff: 5, pass: 0.84 }, desc: '診断と治療。休みはあまりない。',
   },
   {
-    key: 'LAWYER', name: '弁護士', icon: '⚖️', field: '法務',
-    req: ['LAW'], minWorkExp: 700, salary: 2350, shiftPay: 6800, shift: { game: 'WORD', diff: 5 },
-    exam: { game: 'WORD', diff: 5, pass: 0.84 }, desc: '言葉で人を守る仕事。',
+    key: 'LAWYER', name: '弁護士', icon: '⚖️', field: '法務', eduReq: 3,
+    req: ['LAW'], minWorkExp: 700, salary: 4600, shiftPay: 8600, shift: { game: 'WORD', diff: 5 },
+    exam: { game: 'CHOICE', diff: 5, pass: 0.84 }, desc: '言葉で人を守る仕事。',
   },
   {
-    key: 'SCIENTIST', name: '研究者', icon: '🔬', field: '研究',
-    req: ['PHD'], minWorkExp: 800, salary: 2600, shiftPay: 7400, shift: { game: 'INSPECT', diff: 5 },
-    exam: { game: 'INSPECT', diff: 5, pass: 0.86 }, desc: '誰も知らないことを最初に知る。',
+    key: 'SCIENTIST', name: '研究者', icon: '🔬', field: '研究', eduReq: 3, volatile: true,
+    req: ['PHD'], minWorkExp: 800, salary: 5000, shiftPay: 9200, shift: { game: 'INSPECT', diff: 5 },
+    exam: { game: 'INSPECT', diff: 5, pass: 0.86 },
+    desc: '誰も知らないことを最初に知る。空振りの日もあれば、大発見の日もある。',
+    perk: '出来ばえで報酬が激変（最大 2.45 倍、失敗すればほぼゼロ）',
+  },
+  /* ---- YUTAPON グループの2職。給料6倍・経験10倍、条件も最高 ---- */
+  {
+    key: 'BANKER', name: 'YUTAPON-BANK 行員', icon: '🏦', field: 'YUTAPON', group: 'BANK', eduReq: 3, calcJob: true,
+    req: ['BOOK', 'SEC'], minWorkExp: 1000, salary: 20400, shiftPay: 57600, shift: { game: 'LOAN', diff: 4 },
+    exam: { game: 'LOAN', diff: 3, pass: 0.8 },
+    desc: '実在するプレイヤーの融資を審査する。判断が銀行の資産に直結する。',
+    perk: '役職に応じて自分の預金金利が上がる／経験値10倍',
+  },
+  {
+    key: 'CASINOSTAFF', name: 'YUTAPON-CASINO 職員', icon: '🎰', field: 'YUTAPON', group: 'CASINO', eduReq: 3,
+    req: ['DEALER', 'QC'], minWorkExp: 1000, salary: 21600, shiftPay: 61200, shift: { game: 'FRAUD', diff: 4 },
+    exam: { game: 'FRAUD', diff: 3, pass: 0.8 },
+    desc: 'カジノの配当記録を監査し、VIP 会員制度を管轄する。',
+    perk: '役職に応じて VIP 券が割引／経験値10倍',
   },
 ];
 export const careerOf = (k) => CAREERS.find(c => c.key === k) || null;
@@ -151,24 +194,38 @@ export const SHIFT_COOLDOWN = 60 * 1000;      // 出勤の間隔
 export const rankOf = (i) => RANKS[Math.max(0, Math.min(RANKS.length - 1, i || 0))];
 export const nextRank = (i) => (i + 1 < RANKS.length ? RANKS[i + 1] : null);
 
-/** 給料（1回の給料日あたり） */
-export function salaryOf(job) {
+/** 給料（1回の給料日あたり）。公務員は大卒だと上がる */
+export const VIP_PAY = 1.1;   // VIPは給料1.1倍
+
+export function salaryOf(job, eduLevel = 0, vip = false) {
   const c = careerOf(job?.key);
   if (!c) return 0;
-  return Math.round(c.salary * rankOf(job.rank).mult);
+  const uni = c.uniBonus && eduLevel >= EDU.UNI ? c.uniBonus : 1;
+  return Math.round(c.salary * rankOf(job.rank).mult * uni * (vip ? VIP_PAY : 1));
 }
 
 /** 出勤1回の満額（実際は出来ばえを掛ける）。役職の効きは給料より控えめ */
-export function shiftPayOf(job) {
+export function shiftPayOf(job, vip = false) {
   const c = careerOf(job?.key);
   if (!c) return 0;
   const m = 1 + (rankOf(job.rank).mult - 1) * 0.5;
-  return Math.round(c.shiftPay * m);
+  return Math.round(c.shiftPay * m * (vip ? VIP_PAY : 1));
 }
 
-/** 出勤で入る経験値 */
-export function shiftExp(diff, perf) {
-  return Math.max(1, Math.round((8 + diff * 4) * (0.4 + perf * 0.9)));
+/** 出勤で入る経験値。YUTAPON グループは10倍 */
+export function shiftExp(diff, perf, mult = 1) {
+  return Math.max(1, Math.round((8 + diff * 4) * (0.4 + perf * 0.9) * mult));
+}
+export const expMultOf = (career) => (career?.group ? 10 : 1);
+
+/** 出来ばえ → 報酬の倍率。volatile な仕事は当たり外れが激しい */
+export function payCurve(career, perf) {
+  if (career?.volatile) {
+    if (perf < 0.5) return perf * 0.5;                  // 半分を切るとほぼ無給
+    return 0.25 + Math.pow(perf, 2.4) * 2.2;            // 完璧なら 2.45 倍まで化ける
+  }
+  if (career?.steady) return 0.6 + perf * 0.5;          // 公務員は安定
+  return perf < 0.3 ? 0.15 : 0.35 + perf * 0.8;
 }
 
 /** 昇進に必要な経験値（届いていなければ残りを返す） */
@@ -178,8 +235,17 @@ export function promotionNeed(job) {
   return { rank: nxt, need: nxt.exp, left: Math.max(0, nxt.exp - (job?.exp || 0)) };
 }
 
-/** 応募の可否 */
-export function canApply(career, licenses, workExp) {
+/* ---------- 転職の不利 ----------
+   別の会社に移るたびに採用が少しきびしくなる。転職エージェントで打ち消せる */
+export const JOB_CHANGE_STEP = 0.04;
+export const JOB_CHANGE_MAX = 0.20;
+export const jobChangePenalty = (changes = 0) => Math.min(JOB_CHANGE_MAX, Math.max(0, changes) * JOB_CHANGE_STEP);
+
+/** 応募の可否（学歴・資格・経験） */
+export function canApply(career, licenses, workExp, eduLevel = 0) {
+  if ((career.eduReq || 0) > (eduLevel || 0)) {
+    return { ok: false, reason: `${EDU_LABEL[career.eduReq]} が必要です` };
+  }
   const miss = (career.req || []).filter(r => !licenses.includes(r));
   if (miss.length) return { ok: false, reason: `資格が足りません：${miss.map(m => licenseOf(m)?.name || m).join('・')}` };
   if ((workExp || 0) < (career.minWorkExp || 0)) {
@@ -198,6 +264,21 @@ export function canTakeExam(license, licenses) {
 
 /** 応募にかかる受験料 */
 export const applyFee = (career) => Math.round(career.salary * 8);
+
+/** 行員の特典：預金金利の上乗せ（30分あたり） */
+export function bankerRateBonus(job) {
+  if (job?.key !== 'BANKER') return 0;
+  return (job.rank || 0) * 0.0002;
+}
+
+/** カジノ職員の特典：VIP 関連の割引率 */
+export function casinoStaffDiscount(job) {
+  if (job?.key !== 'CASINOSTAFF') return 0;
+  return Math.min(0.30, (job.rank || 0) * 0.05);
+}
+
+/** YUTAPON グループの社員か */
+export const isGroupJob = (job) => !!careerOf(job?.key)?.group;
 
 /** ランキングなどに出す肩書き */
 export function jobLabel(job) {

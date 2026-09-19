@@ -69,15 +69,65 @@ export const ITEMS = {
     desc: '競馬で 全頭のスキル をまとめて開示します（1レースにつき1枚）。',
     short: '全頭のスキルを開示',
   },
-  FULL_SCOPE: {
-    key: 'FULL_SCOPE', icon: '🔍', name: '能力スコープ', price: 20000, vipOnly: true,
-    desc: '選んだ1頭の スピード・体力・オッズ・スキル をまとめて開示します。',
-    short: '1頭の全情報を開示',
+  /* ---- 受験まわり ---- */
+  AKAHON: {
+    key: 'AKAHON', icon: '📕', name: '大学受験 赤本', price: 30000, vipOnly: false, cat: 'STUDY',
+    desc: '使うと 4科目ぶんの「出そうな問題」 を読み込めます。必ず出るとは限りません。',
+    short: '予想問題を4科目ぶん',
   },
-  CHARM: {
-    key: 'CHARM', icon: '🍀', name: '幸運のお守り', price: 8000, vipOnly: true,
-    desc: 'そのレースのあいだ、コインでの情報開示が 半額 になります。',
-    short: '情報開示が半額',
+  AKAHON_PRO: {
+    key: 'AKAHON_PRO', icon: '📙', name: '最難関大 予想問題集', price: 120000, vipOnly: false, cat: 'STUDY',
+    desc: '使うと 全科目ぶんの「出そうな問題」 を読み込めます。YUTAPON大学の受験生御用達。',
+    short: '予想問題を全科目ぶん',
+  },
+  LUCKY_CHARM: {
+    key: 'LUCKY_CHARM', icon: '⛩️', name: '合格祈願のお守り', price: 400000, vipOnly: true, cat: 'STUDY',
+    passive: true, unique: true,
+    desc: 'VIP限定・買い切り。持っているあいだ 偏差値 +4。ただし入試を1回でも受けると（受かっても落ちても）効果が切れて無くなります。同時に持てるのは1つだけ。',
+    short: '偏差値+4／入試1回で消える',
+  },
+  LAUNDER_HS: {
+    key: 'LAUNDER_HS', icon: '🧼', name: '学歴ロンダリング（高校）', price: 3000000, vipOnly: false, cat: 'STUDY',
+    desc: '高校の学歴を消します。もう一度ちがう高校を受け直したいときに。とても高価です。',
+    short: '高校の学歴を消す',
+  },
+  LAUNDER_UNI: {
+    key: 'LAUNDER_UNI', icon: '🧽', name: '学歴ロンダリング（大学）', price: 12000000, vipOnly: false, cat: 'STUDY',
+    desc: '大学の学歴を消します。上の大学に入り直したいときに。桁違いに高価です。',
+    short: '大学の学歴を消す',
+  },
+  AGENT: {
+    key: 'AGENT', icon: '🤝', name: '転職エージェント', price: 180000, vipOnly: false, cat: 'WORK',
+    desc: '使った次の採用試験では、転職を繰り返したことによる不利がなくなります。',
+    short: '転職の不利を打ち消す',
   },
 };
+
+/* ---------- 買えるタグ ---------- */
+export const TAG_ITEMS = [
+  {
+    key: 'RICH_LORD', icon: '🎩', name: '「大富豪」の称号', price: 3000000000, vipOnly: true,
+    label: '🎩大富豪', color: '#fde68a',
+    desc: 'VIP限定。名前の横に付けられる最上級の称号。値段も最上級。',
+  },
+];
+export const tagItemOf = (k) => TAG_ITEMS.find(t => t.key === k) || null;
+
+/* ---------- プロフィールのアイコン ---------- */
+export const ICONS = [
+  { key: 'FREE_1', icon: '🙂', name: 'ふつう', price: 0 },
+  { key: 'FREE_2', icon: '😎', name: 'サングラス', price: 0 },
+  { key: 'FREE_3', icon: '🐱', name: 'ねこ', price: 0 },
+  { key: 'COIN', icon: '🪙', name: 'コイン', price: 3000 },
+  { key: 'CARD', icon: '🃏', name: 'ジョーカー', price: 8000 },
+  { key: 'HORSE', icon: '🐎', name: 'サラブレッド', price: 12000 },
+  { key: 'DIAMOND', icon: '💎', name: 'ダイヤ', price: 30000 },
+  { key: 'ROCKET', icon: '🚀', name: 'ロケット', price: 45000 },
+  { key: 'GRAD', icon: '🎓', name: '学士帽', price: 60000 },
+  { key: 'BANKICON', icon: '🏦', name: '銀行家', price: 90000 },
+  { key: 'CROWN', icon: '👑', name: '王冠', price: 200000 },
+  { key: 'DRAGON', icon: '🐉', name: '龍', price: 500000 },
+  { key: 'YUTA', icon: '🌟', name: 'YUTAPON', price: 1500000 },
+];
+export const iconOf = (k) => ICONS.find(i => i.key === k) || ICONS[0];
 export const ITEM_LIST = Object.values(ITEMS);

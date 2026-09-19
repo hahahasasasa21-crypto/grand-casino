@@ -1,12 +1,16 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { ArrowLeft, Briefcase, GraduationCap, Building2, Clock, Award, LogOut, TrendingUp, Lock, Check } from 'lucide-react';
+import { ArrowLeft, Briefcase, GraduationCap, Building2, Clock, Award, LogOut, TrendingUp, Lock, Check, Pickaxe } from 'lucide-react';
 import { Panel, GoldButton, SectionTitle, playSfx } from '../../shared/ui';
 import { MiniGame } from './minigames.jsx';
+import MiningView from './Mining.jsx';
 import {
   GAMES, gameOf, PART_TIME, partTimeOf, LICENSES, licenseOf, CAREERS, careerOf,
   RANKS, rankOf, nextRank, salaryOf, shiftPayOf, shiftExp, promotionNeed,
   canApply, canTakeExam, applyFee, gradeOf, PAY_INTERVAL, SHIFT_COOLDOWN,
+  bankerRateBonus, casinoStaffDiscount, payCurve, expMultOf, EDU_LABEL, jobChangePenalty,
 } from './jobs.js';
+import { recommendPerk, eduLevelOf, RETRY_MS } from '../school/schools.js';
+import { postKindOf, postingPayable } from '../../shared/corp.js';
 
 /* ==========================================================
    YUTAPON WORKS — 職業安定所
@@ -68,7 +72,10 @@ function ResultCard({ data, onClose }) {
 export default function WorkView({
   balance, updateBalance, onBack, showToast, playerName, emitNews,
   job, licenses = [], jobRecord = {}, workExp = 0, workCool = {}, saveWork,
+  rankingData = [], onGroupWork, miningBalance, edu = {}, vip = false,
+  companies = [], onCorpWork, items = {}, onUseItem, jobChanges = 0,
 }) {
+  const eduLevel = eduLevelOf(edu);
   const [tab, setTab] = useState('PART');        // PART | LICENSE | CAREER
   const [task, setTask] = useState(null);        // 実行中のミニゲーム
   const [result, setResult] = useState(null);
@@ -86,11 +93,51 @@ export default function WorkView({
     try { await saveWork(patch); } catch (e) { showToast('保存に失敗しました。', 'error'); }
   }, [saveWork, showToast]);
 
+  /** よその会社が出している求人 */
+  const postings = useMemo(() => {
+    const out = [];
+    (companies || []).forEach(c => (c.postings || []).forEach(pj => {
+      if (c.owner === playerName) return;          // 自分の会社では働けない
+      out.push({ ...pj, corpId: c.id, corpName: c.name, corpIcon: c.icon, company: c });
+    }));
+    return out.sort((a, b) => b.pay - a.pay);
+  }, [companies, playerName]);
+
   /* ---------- アルバイト ---------- */
   const startPart = (j) => {
     const left = Math.max(0, (workCool[j.key] || 0) + j.cool - now);
     if (left > 0) { showToast(`${j.name} は あと ${Math.ceil(left / 1000)} 秒で受けられます。`, 'warning'); return; }
     setTask({ kind: 'PART', job: j, game: j.game, diff: j.diff, title: j.name, sub: j.desc });
+  };
+
+  /* ---------- 会社の求人で働く ---------- */
+  const startPosting = (pj) => {
+    const k = postKindOf(pj.kind);
+    const left = Math.max(0, (workCool[`C_${pj.id}`] || 0) + k.cool - now);
+    if (left > 0) { showToast(`次に働けるまで あと ${Math.ceil(left / 1000)} 秒です。`, 'warning'); return; }
+    if (postingPayable(pj.company, pj.pay) <= 0) { showToast('この会社にいま支払う資金がありません。', 'error'); return; }
+    setTask({
+      kind: 'POST', posting: pj, game: pj.game, diff: pj.diff,
+      title: `${pj.name}（${pj.corpName}）`, sub: `${k.name}・満額 ${fmt(pj.pay)} G`,
+    });
+  };
+
+  const finishPosting = async (pj, perf) => {
+    const full = Math.round(pj.pay * (perf < 0.3 ? 0.15 : 0.35 + perf * 0.85));
+    let paid = 0;
+    if (onCorpWork) paid = await onCorpWork(pj.corpId, full);
+    const exp = Math.round(shiftExp(pj.diff, perf) * (pj.kind === 'FULL' ? 1.4 : 0.8));
+    await save({ workExp: (workExp || 0) + exp, workCool: { ...workCool, [`C_${pj.id}`]: Date.now() } });
+    playSfx(perf >= 0.6 ? 'win' : 'click');
+    setResult({
+      headline: postKindOf(pj.kind).name.toUpperCase(), title: `${pj.corpName}・${pj.name}`, perf, ok: perf >= 0.4,
+      lines: [
+        { label: '報酬', value: `+${fmt(paid)} G`, tone: 'text-emerald-300' },
+        { label: '通算経験', value: `+${exp}` },
+        ...(paid < full ? [{ label: '会社の資金不足', value: `満額 ${fmt(full)} G`, tone: 'text-red-300' }] : []),
+      ],
+      note: paid <= 0 ? 'この会社にお金がなく、報酬が支払われませんでした。' : '',
+    });
   };
 
   const finishPart = async (j, perf) => {
@@ -119,11 +166,45 @@ export default function WorkView({
     try { await updateBalance(-lic.fee); }
     catch (e) { busyRef.current = false; setBusy(false); return; }
     busyRef.current = false; setBusy(false);
-    setTask({ kind: 'EXAM', lic, game: lic.game, diff: lic.diff, title: `${lic.name} 試験`, sub: `合格ライン ${Math.round(lic.pass * 100)}％` });
+    const st = lic.stages?.[0];
+    setTask({
+      kind: 'EXAM', lic, stage: 0,
+      game: st?.game || lic.game, diff: st?.diff ?? lic.diff,
+      cols: st?.cols, rounds: st?.rounds,
+      title: `${lic.name} 試験${st ? `（${st.name}）` : ''}`,
+      sub: `合格ライン ${Math.round((st?.pass ?? lic.pass) * 100)}％`,
+    });
   };
 
-  const finishExam = async (lic, perf) => {
-    const passed = perf >= lic.pass;
+  const finishExam = async (lic, perf, stage = 0) => {
+    const stages = lic.stages;
+    if (stages) {
+      const cur = stages[stage];
+      if (perf < cur.pass) {
+        playSfx('click');
+        setResult({
+          headline: 'EXAMINATION', title: `${lic.name}・${cur.name}`, perf, ok: false,
+          lines: [
+            { label: '合格ライン', value: `${Math.round(cur.pass * 100)}％` },
+            { label: 'あなたの得点', value: `${Math.round(perf * 100)}％`, tone: 'text-red-300' },
+          ],
+          note: '不合格… 受験料は返りません。',
+        });
+        return;
+      }
+      if (stage + 1 < stages.length) {
+        const nx = stages[stage + 1];
+        showToast(`✅ ${cur.name} 合格！ 続けて ${nx.name} です。`, 'success');
+        setTask({
+          kind: 'EXAM', lic, stage: stage + 1,
+          game: nx.game, diff: nx.diff, cols: nx.cols, rounds: nx.rounds,
+          title: `${lic.name} 試験（${nx.name}）`,
+          sub: `合格ライン ${Math.round(nx.pass * 100)}％`,
+        });
+        return;
+      }
+    }
+    const passed = stages ? true : perf >= lic.pass;
     if (passed) {
       await save({ licenses: [...licenses, lic.key] });
       playSfx('win');
@@ -145,7 +226,12 @@ export default function WorkView({
   const startApply = async (c) => {
     if (busyRef.current) return;
     if (job) { showToast('先に今の仕事を退職してください。', 'warning'); return; }
-    const chk = canApply(c, licenses, workExp);
+    const until = (edu.retryAt || {})[c.key] || 0;
+    if (Date.now() < until) {
+      showToast(`${c.name} の再チャレンジまで あと ${Math.ceil((until - Date.now()) / 60000)} 分です。`, 'warning');
+      return;
+    }
+    const chk = canApply(c, licenses, workExp, eduLevel);
     if (!chk.ok) { showToast(chk.reason, 'warning'); return; }
     const fee = applyFee(c);
     if (balance < fee) { showToast(`受験料 ${fmt(fee)} G が足りません。`, 'error'); return; }
@@ -153,28 +239,49 @@ export default function WorkView({
     try { await updateBalance(-fee); }
     catch (e) { busyRef.current = false; setBusy(false); return; }
     busyRef.current = false; setBusy(false);
+
+    const perk = recommendPerk(edu, c);
+    if (perk.skip) { await finishApply(c, 1, true); return; }   // 推薦で試験免除
+    let penalty = jobChangePenalty(jobChanges);
+    if (penalty > 0 && (items.AGENT || 0) > 0 && onUseItem) {
+      if (await onUseItem('AGENT')) { penalty = 0; showToast('🤝 転職エージェントが不利を帳消しにしました。', 'success'); }
+    }
+    const line = Math.max(0.28, c.exam.pass - (perk.ease || 0) + penalty);
     setTask({
-      kind: 'APPLY', career: c, game: c.exam.game, diff: c.exam.diff,
-      title: `${c.name} 採用試験`, sub: `合格ライン ${Math.round(c.exam.pass * 100)}％`,
+      kind: 'APPLY', career: c, game: c.exam.game, diff: Math.max(1, c.exam.diff - (perk.diffDown || 0)), line,
+      title: `${c.name} 採用試験`,
+      sub: `合格ライン ${Math.round(line * 100)}％${perk.ease ? `（推薦 -${Math.round(perk.ease * 100)}pt）` : ''}${penalty ? `（転職 +${Math.round(penalty * 100)}pt）` : ''}`,
     });
   };
 
-  const finishApply = async (c, perf) => {
-    const passed = perf >= c.exam.pass;
+  const finishApply = async (c, perf, recommended = false) => {
+    const perk = recommendPerk(edu, c);
+    const line = Math.max(0.28, c.exam.pass - (perk.ease || 0) + jobChangePenalty(jobChanges));
+    const passed = recommended || perf >= line;
+    if (!passed) await save({ [`edu.retryAt.${c.key}`]: Date.now() + RETRY_MS });
     if (passed) {
       const rec = jobRecord[c.key] || { rank: 0, exp: 0 };
       const t = Date.now();
-      await save({ job: { key: c.key, rank: rec.rank || 0, exp: rec.exp || 0, hiredAt: t, lastPayAt: t, lastShiftAt: 0 } });
+      // 前と違う会社に移ったら転職1回とカウント（次からの採用が少しきびしくなる）
+      const moved = jobRecord.__last && jobRecord.__last !== c.key;
+      await save({
+        job: { key: c.key, rank: rec.rank || 0, exp: rec.exp || 0, hiredAt: t, lastPayAt: t, lastShiftAt: 0 },
+        'jobRecord.__last': c.key,
+        ...(moved ? { jobChanges: (jobChanges || 0) + 1 } : {}),
+      });
       playSfx('win');
       if (emitNews) emitNews(`${c.icon} ${playerName} が【${c.name}】として採用されました！`, 'info');
     } else playSfx('click');
     setResult({
       headline: 'RECRUITMENT', title: c.name, perf, ok: passed,
       lines: [
-        { label: '合格ライン', value: `${Math.round(c.exam.pass * 100)}％` },
-        { label: 'あなたの得点', value: `${Math.round(perf * 100)}％`, tone: passed ? 'text-emerald-300' : 'text-red-300' },
+        { label: '合格ライン', value: recommended ? '推薦（免除）' : `${Math.round(line * 100)}％` },
+        { label: 'あなたの得点', value: recommended ? '—' : `${Math.round(perf * 100)}％`, tone: passed ? 'text-emerald-300' : 'text-red-300' },
+        ...(perk.notes?.length ? [{ label: '推薦', value: perk.notes[0], tone: 'text-sky-300' }] : []),
       ],
-      note: passed ? `🎉 今日から ${c.name} です！` : '残念ながら不採用でした…',
+      note: passed
+        ? (recommended ? `🎉 推薦で採用！ 今日から ${c.name} です。` : `🎉 今日から ${c.name} です！`)
+        : `不採用… ${Math.round(RETRY_MS / 60000)} 分後に再チャレンジできます。`,
     });
     if (passed) setTab('CAREER');
   };
@@ -184,20 +291,25 @@ export default function WorkView({
     if (shiftLeft > 0) { showToast(`次の出勤まで あと ${Math.ceil(shiftLeft / 1000)} 秒です。`, 'warning'); return; }
     setTask({
       kind: 'SHIFT', career, game: career.shift.game, diff: career.shift.diff,
-      title: `${career.name}の出勤`, sub: `${rank.name}・満額 ${fmt(shiftPayOf(job))} G`,
+      title: `${career.name}の出勤`, sub: `${rank.name}・満額 ${fmt(shiftPayOf(job, vip))} G`,
     });
   };
 
   const finishShift = async (c, perf) => {
-    const full = shiftPayOf(job);
-    const pay = perf < 0.3 ? Math.round(full * 0.15) : Math.round(full * (0.35 + perf * 0.8));
-    const exp = shiftExp(c.shift.diff, perf);
+    const full = shiftPayOf(job, vip);
+    const pay = Math.round(full * payCurve(c, perf));
+    const exp = shiftExp(c.shift.diff, perf, expMultOf(c));
     if (pay > 0) { try { await updateBalance(pay); } catch (e) { /* noop */ } }
     const nj = { ...job, exp: (job.exp || 0) + exp, lastShiftAt: Date.now() };
     await save({
       job: nj, workExp: (workExp || 0) + exp,
       jobRecord: { ...jobRecord, [c.key]: { rank: nj.rank, exp: nj.exp } },
     });
+    // YUTAPON グループの社員は、働いた成果がそのまま金庫に反映される
+    if (c.group && onGroupWork) {
+      const earned = Math.round(full * perf * 1.6);
+      onGroupWork(c.group, earned, pay);
+    }
     playSfx(perf >= 0.6 ? 'win' : 'click');
     const need = promotionNeed(nj);
     setResult({
@@ -251,13 +363,20 @@ export default function WorkView({
     showToast(`${career.name} を退職しました。役職と経験は残ります。`, 'info');
   };
 
+  /** 融資審査・不正検知にわたす文脈（実在プレイヤーの数字を使う） */
+  const gameCtx = useMemo(() => ({
+    players: (rankingData || []).filter(r => !r.isBank && r.name !== playerName),
+    cols: task?.cols, rounds: task?.rounds,
+  }), [rankingData, playerName, task]);
+
   /* ---------- ミニゲームの終了 ---------- */
   const onDone = useCallback(async (perf) => {
     const t = task;
     setTask(null);
     if (!t) return;
     if (t.kind === 'PART') return finishPart(t.job, perf);
-    if (t.kind === 'EXAM') return finishExam(t.lic, perf);
+    if (t.kind === 'EXAM') return finishExam(t.lic, perf, t.stage || 0);
+    if (t.kind === 'POST') return finishPosting(t.posting, perf);
     if (t.kind === 'APPLY') return finishApply(t.career, perf);
     if (t.kind === 'SHIFT') return finishShift(t.career, perf);
     if (t.kind === 'PROMO') return finishPromo(t.career, perf);
@@ -268,7 +387,7 @@ export default function WorkView({
   if (task) {
     return (
       <div className="p-4 md:p-8 max-w-2xl mx-auto">
-        <MiniGame game={task.game} diff={task.diff} title={task.title} sub={task.sub}
+        <MiniGame game={task.game} diff={task.diff} title={task.title} sub={task.sub} ctx={gameCtx}
           onDone={onDone} onQuit={() => { setTask(null); showToast('中断しました。', 'info'); }} />
       </div>
     );
@@ -290,7 +409,7 @@ export default function WorkView({
       </div>
 
       <Panel gold className="p-5 mb-4">
-        <SectionTitle icon={<Briefcase size={26} />} title="YUTAPON WORKS" sub="アルバイト・資格・就職" />
+        <SectionTitle icon={<Briefcase size={26} />} title="仕事" sub="アルバイト・求人・採掘・資格・就職" />
         <div className="grid grid-cols-3 gap-2 mt-3">
           <div className="p-2.5 rounded-xl bg-black/40 border border-white/10 text-center">
             <div className="text-[9px] text-gray-500 font-bold">いまの仕事</div>
@@ -310,14 +429,15 @@ export default function WorkView({
         </div>
       </Panel>
 
-      <div className="grid grid-cols-3 gap-2 mb-4">
+      <div className="grid grid-cols-4 gap-2 mb-4">
         {[
           { k: 'PART', label: 'アルバイト', icon: <Briefcase size={15} /> },
+          { k: 'MINE', label: '採掘', icon: <Pickaxe size={15} /> },
           { k: 'LICENSE', label: '資格', icon: <GraduationCap size={15} /> },
           { k: 'CAREER', label: '就職', icon: <Building2 size={15} /> },
         ].map(t => (
           <button key={t.k} onClick={() => setTab(t.k)}
-            className={`py-2.5 rounded-xl font-black text-sm border-2 transition flex items-center justify-center gap-1.5
+            className={`py-2.5 rounded-xl font-black text-[13px] border-2 transition flex items-center justify-center gap-1.5
               ${tab === t.k ? 'border-amber-400 bg-amber-400/15 text-amber-200' : 'border-white/10 bg-black/40 text-gray-400 hover:text-white'}`}>
             {t.icon}{t.label}
           </button>
@@ -327,6 +447,41 @@ export default function WorkView({
       {/* ---------- アルバイト ---------- */}
       {tab === 'PART' && (
         <div className="space-y-2">
+          {postings.length > 0 && (
+            <>
+              <div className="text-[10px] font-black tracking-widest text-sky-300/80 flex items-center gap-1.5">
+                🏢 企業の求人（{postings.length}）
+              </div>
+              {postings.map(pj => {
+                const k = postKindOf(pj.kind);
+                const g = gameOf(pj.game);
+                const left = Math.max(0, (workCool[`C_${pj.id}`] || 0) + k.cool - now);
+                const payable = postingPayable(pj.company, pj.pay);
+                return (
+                  <button key={pj.id} onClick={() => startPosting(pj)} disabled={left > 0 || payable <= 0}
+                    className="w-full flex items-center gap-3 p-3 rounded-2xl bg-sky-500/5 border border-sky-400/25 hover:border-sky-400/60 transition text-left disabled:opacity-45">
+                    <span className="text-2xl shrink-0">{k.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-black text-white text-sm">{pj.name}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-sky-400/15 text-sky-200 font-bold border border-sky-400/30">{k.name}</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-white/10 text-gray-300 font-bold">{g.icon}{g.name}</span>
+                        <Stars n={pj.diff} />
+                      </div>
+                      <p className="text-[11px] text-gray-500 truncate">🏢 {pj.corpName} が募集中</p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono font-black text-amber-300 text-sm">{fmt(pj.pay)} G</div>
+                      <div className="text-[10px] text-gray-500">
+                        {payable <= 0 ? '資金切れ' : left > 0 ? `休憩 ${Math.ceil(left / 1000)}s` : '働く'}
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+              <div className="h-1" />
+            </>
+          )}
           <p className="text-[11px] text-gray-500 mb-1">資格がなくても今すぐ働けます。出来ばえで日給が変わり、通算経験も少し貯まります。</p>
           {PART_TIME.map(j => {
             const g = gameOf(j.game);
@@ -350,6 +505,14 @@ export default function WorkView({
               </button>
             );
           })}
+        </div>
+      )}
+
+      {/* ---------- 採掘 ---------- */}
+      {tab === 'MINE' && (
+        <div className="-mx-4 md:-mx-8">
+          <MiningView balance={balance} updateBalance={miningBalance || updateBalance}
+            onBack={() => setTab('PART')} showToast={showToast} playerName={playerName} emitNews={emitNews} />
         </div>
       )}
 
@@ -410,15 +573,26 @@ export default function WorkView({
               <div className="grid grid-cols-2 gap-2 mb-3">
                 <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
                   <div className="text-[9px] text-gray-500 font-bold">給料（{Math.round(PAY_INTERVAL / 60000)}分ごと）</div>
-                  <div className="font-mono font-black text-emerald-300">{fmt(salaryOf(job))} G</div>
+                  <div className="font-mono font-black text-emerald-300">{fmt(salaryOf(job, eduLevel, vip))} G</div>
                   <div className="text-[10px] text-gray-500 flex items-center gap-1"><Clock size={9} />次まで {mmss(payLeft)}</div>
                 </div>
                 <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
                   <div className="text-[9px] text-gray-500 font-bold">出勤手当（満額）</div>
-                  <div className="font-mono font-black text-amber-300">{fmt(shiftPayOf(job))} G</div>
+                  <div className="font-mono font-black text-amber-300">{fmt(shiftPayOf(job, vip))} G</div>
                   <div className="text-[10px] text-gray-500">{gameOf(career.shift.game).icon}{gameOf(career.shift.game).name}・<Stars n={career.shift.diff} /></div>
                 </div>
               </div>
+
+              {career.perk && (
+                <div className="mb-3 px-3 py-2 rounded-xl bg-sky-500/10 border border-sky-400/30">
+                  <div className="text-[10px] font-black tracking-widest text-sky-300 mb-0.5">社員特典</div>
+                  <p className="text-[11px] text-gray-300">
+                    {career.perk}
+                    {career.key === 'BANKER' && <b className="text-emerald-300">（いま +{(bankerRateBonus(job) * 100).toFixed(2)}％／30分）</b>}
+                    {career.key === 'CASINOSTAFF' && <b className="text-amber-300">（いま {Math.round(casinoStaffDiscount(job) * 100)}％引き）</b>}
+                  </p>
+                </div>
+              )}
 
               <div className="mb-3">
                 <div className="flex justify-between text-[10px] font-bold mb-1">
@@ -469,7 +643,7 @@ export default function WorkView({
 
           <div className="space-y-2">
             {CAREERS.map(c => {
-              const chk = canApply(c, licenses, workExp);
+              const chk = canApply(c, licenses, workExp, eduLevel);
               const mine = job?.key === c.key;
               const rec = jobRecord[c.key];
               return (
@@ -502,6 +676,14 @@ export default function WorkView({
                           経験 {c.minWorkExp}
                         </span>
                       )}
+                      {c.eduReq > 0 && (
+                        <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-md border
+                          ${eduLevel >= c.eduReq ? 'text-emerald-300 border-emerald-400/30 bg-emerald-500/10' : 'text-red-300 border-red-400/30 bg-red-500/10'}`}>
+                          🎓{EDU_LABEL[c.eduReq]}
+                        </span>
+                      )}
+                      {c.volatile && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md border text-amber-300 border-amber-400/30 bg-amber-500/10">💥 出来ばえで激変</span>}
+                      {c.group && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md border text-amber-200 border-amber-300/40 bg-amber-400/15">🌟 給料6倍・経験10倍</span>}
                     </div>
                   </div>
                   <div className="text-right shrink-0">

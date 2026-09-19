@@ -44,7 +44,7 @@ function StatBar({ value, color = '#34d399', hidden }) {
 }
 
 /* ---------- 出走馬カード ---------- */
-function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canReveal, disabled, ordered, scopeMode }) {
+function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canReveal, disabled, ordered }) {
   const has = (f) => revealed.includes(f);
   return (
     <div className={`rounded-xl border-2 p-2 transition ${picked ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40'}`}>
@@ -119,10 +119,6 @@ function EntryRow({ e, revealed, picked, pickIndex, onPick, onReveal, cost, canR
             className="mt-1 text-[9px] font-black px-2 py-1 rounded-lg bg-sky-600/80 hover:bg-sky-500 text-white disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-1">
             <Eye size={10} />{canReveal ? fmt(cost) : revealed.length >= REVEAL_FIELDS.length ? '全開示' : '上限'}
           </button>
-          {scopeMode && (
-            <button onClick={() => onPick(e.id)}
-              className="mt-1 w-full text-[9px] font-black px-2 py-1 rounded-lg bg-amber-400 text-black">🔍 この馬に使う</button>
-          )}
         </div>
       </div>
     </div>
@@ -148,8 +144,6 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
   const [speedUp, setSpeedUp] = useState(false);
   const [skillFeed, setSkillFeed] = useState([]);
   const [tab, setTab] = useState('CARD');            // CARD | ROOM
-  const [charm, setCharm] = useState(false);        // 幸運のお守り（情報開示が半額）
-  const [scopeMode, setScopeMode] = useState(false);// 能力スコープの対象選択中
 
   // 公開レース
   const [rooms, setRooms] = useState([]);
@@ -197,7 +191,6 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
     setCard(withOdds);
     setReveals({}); setRevealsUsed(0); setPicks([]); setTickets([]);
     setResultOrder(null); setPayouts(null); setSkillFeed([]);
-    setCharm(false); setScopeMode(false);
     settledRef.current = false; startedRef.current = false;
     simRef.current = null;
     setCommentary('出走馬の能力は非公開です。コインを払って情報を集めましょう。');
@@ -206,12 +199,12 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
   }, []);
 
   /* ---------- 情報開示 ---------- */
-  const unitCost = Math.ceil(revealCost(betAmount, revealsUsed) * (charm ? 0.5 : 1));
+  const unitCost = revealCost(betAmount, revealsUsed);
   const doReveal = async (id) => {
     if (!card) return;
     const cur = reveals[id] || [];
     if (cur.length >= MAX_REVEAL_PER_HORSE) {
-      showToast(`情報開示は1頭につき ${MAX_REVEAL_PER_HORSE}項目 までです。（全知の望遠鏡だけが上限を無視できます）`, 'warning');
+      showToast(`情報開示は1頭につき ${MAX_REVEAL_PER_HORSE}項目 までです。`, 'warning');
       return;
     }
     const left = REVEAL_FIELDS.filter(f => !cur.includes(f));
@@ -239,7 +232,6 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
 
   const togglePick = (id) => {
     if (phase !== 'BETTING') return;
-    if (scopeMode) { doScope(id); return; }
     setPicks(prev => {
       if (prev.includes(id)) return prev.filter(p => p !== id);
       if (prev.length >= maxPicks) {
@@ -332,22 +324,6 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
     revealAll('skills');
     playSfx('coin');
     showToast('📜 全頭のスキルを開示しました！', 'success');
-  };
-  const useCharm = async () => {
-    if (charm || (items[ITEMS.CHARM.key] || 0) <= 0) return;
-    if (!(await useItem(ITEMS.CHARM.key))) { showToast('お守りを使えませんでした。', 'error'); return; }
-    setCharm(true);
-    playSfx('coin');
-    showToast('🍀 このレースの情報開示が半額になりました！', 'success');
-  };
-  const doScope = async (id) => {
-    setScopeMode(false);
-    if ((items[ITEMS.FULL_SCOPE.key] || 0) <= 0) return;
-    if (!(await useItem(ITEMS.FULL_SCOPE.key))) { showToast('スコープを使えませんでした。', 'error'); return; }
-    setReveals(prev => ({ ...prev, [id]: [...REVEAL_FIELDS] }));
-    playSfx('coin');
-    const e = card.entries.find(x => x.id === id);
-    showToast(`🔍 ${e.name} の全情報を開示しました！`, 'success');
   };
 
   /* ---------- 精算 ---------- */
@@ -867,30 +843,27 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                 </div>
                 <p className="text-[10px] text-gray-500 leading-snug">
                   馬の「<b className="text-gray-300">スピード / 体力 / オッズ / スキル</b>」のうち、まだ隠れている1項目が<b className="text-gray-300">ランダムに</b>判明します。<br />
-                  <b className="text-sky-300">1頭につき {MAX_REVEAL_PER_HORSE}項目 まで</b>（🔭 全知の望遠鏡だけが上限を無視できます）。<br />
+                  <b className="text-sky-300">1頭につき {MAX_REVEAL_PER_HORSE}項目 まで</b>。<br />
                   単価 = 200G ＋ 購入予定額 <b className="text-gray-300">{fmt(betAmount)}G</b> の40％。開示のたびに ×1.25（現在{revealsUsed}回）。
                 </p>
               </Panel>
 
               {/* 道具 */}
-              {(items[ITEMS.ODDS_TICKET.key] || items[ITEMS.SKILL_BOOK.key] || items[ITEMS.FULL_SCOPE.key] || items[ITEMS.CHARM.key] || charm) ? (
+              {(items[ITEMS.ODDS_TICKET.key] || items[ITEMS.SKILL_BOOK.key]) ? (
                 <Panel className="p-3">
                   <div className="flex items-center justify-between mb-2">
                     <h3 className="text-sm font-black text-white flex items-center gap-1.5">🎒 道具</h3>
-                    {charm && <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30">🍀 開示半額</span>}
                   </div>
                   <div className="grid grid-cols-2 gap-1.5">
                     {[
                       { it: ITEMS.ODDS_TICKET, on: useOddsTicket, disabled: phase !== 'BETTING' },
                       { it: ITEMS.SKILL_BOOK, on: useSkillBook, disabled: phase !== 'BETTING' },
-                      { it: ITEMS.FULL_SCOPE, on: () => setScopeMode(v => !v), disabled: phase !== 'BETTING' },
-                      { it: ITEMS.CHARM, on: useCharm, disabled: phase !== 'BETTING' || charm },
                     ].map(({ it, on, disabled }) => {
                       const n = items[it.key] || 0;
                       return (
                         <button key={it.key} onClick={on} disabled={disabled || n <= 0}
                           className={`flex items-center gap-1.5 p-2 rounded-lg border text-left transition disabled:opacity-30
-                            ${it.key === ITEMS.FULL_SCOPE.key && scopeMode ? 'bg-amber-400/20 border-amber-400' : 'bg-black/40 border-white/10 hover:bg-white/5'}`}>
+                            bg-black/40 border-white/10 hover:bg-white/5`}>
                           <span className="text-lg leading-none">{it.icon}</span>
                           <span className="min-w-0">
                             <span className="block text-[10px] font-black text-white truncate">{it.name}</span>
@@ -900,7 +873,6 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                       );
                     })}
                   </div>
-                  {scopeMode && <p className="text-[10px] text-amber-300 font-bold mt-1.5">出馬表から対象の馬を選んでください。</p>}
                 </Panel>
               ) : null}
 
@@ -978,7 +950,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                       const idx = picks.indexOf(e.id);
                       return (
                         <EntryRow key={e.id} e={e} revealed={rev}
-                          picked={idx >= 0} pickIndex={idx} ordered={BET_TYPES[betType].ordered} scopeMode={scopeMode}
+                          picked={idx >= 0} pickIndex={idx} ordered={BET_TYPES[betType].ordered} 
                           onPick={togglePick} onReveal={doReveal}
                           cost={unitCost} canReveal={phase === 'BETTING' && rev.length < MAX_REVEAL_PER_HORSE && balance >= unitCost}
                           disabled={phase !== 'BETTING'} />

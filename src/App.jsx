@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { doc, setDoc, getDoc, onSnapshot, updateDoc, increment, collection, writeBatch, addDoc, query, orderBy, limit, deleteDoc, where, runTransaction } from 'firebase/firestore';
-import { Coins, Trophy, ArrowLeft, AlertCircle, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, TrendingUp, Lock, Newspaper, Pickaxe, BookOpen, History, ShoppingBag, Crown, Building2, Users } from 'lucide-react';
+import { Coins, Trophy, ArrowLeft, AlertCircle, Landmark, Send, ChevronRight, RefreshCw, TrendingDown, TrendingUp, Lock, Newspaper, Pickaxe, BookOpen, History, ShoppingBag, Crown, Building2, Users, Plane, Dices, ArrowLeftRight } from 'lucide-react';
 import { db, auth, appId, postNews } from './shared/firebase';
 import { FeltBackdrop, Panel, GoldButton, SectionTitle, ErrorBoundary, VipBadge, TopBadge, TAU } from './shared/ui';
 import {
@@ -29,10 +29,45 @@ import SlotMachine from './games/SlotMachine';
 import RedBlackView from './games/RedBlack';
 import PokerView from './games/Poker.jsx';
 import HorseRacing from './games/HorseRacing.jsx';
+import TravelView from './views/Travel.jsx';
+import ClubView from './games/club/index.jsx';
+import CasinoLobby from './views/CasinoLobby.jsx';
+import ArenaView from './views/Arena.jsx';
+import { ensureArena, watchArena, normalizeArena } from './shared/arena.js';
+import {
+  COUNTRIES, countryOf, normalizeTravel, inFlight, watchFly, ensureFly,
+  normalizeFly, flyTotal, FLY_START, claimPilotPay, flyPayroll, payPilotPool,
+} from './shared/world.js';
+import ExchangeView from './views/Exchange.jsx';
+import {
+  CURRENCIES, currencyOfCountry, normalizeWallet, walletValue, ratesOf,
+  ensureFx, watchFx, tickFx,
+} from './shared/fx.js';
+import { normalizeClub } from './games/club/clubs.js';
 /* ==========================================================
    競馬イベント：解放
    ========================================================== */
 const HORSE_RACING_EVENT_ACTIVE = true;
+
+/* ==========================================================
+   カジノは「オフライン」と「オンライン」の2つに分かれている
+   ・オフライン … 相手はハウス（YUTAPON-CASINO）。ひとりで好きなときに
+   ・オンライン … 相手はほかのプレイヤー。部屋に人がいるほど盛り上がる
+   ========================================================== */
+const CASINO_SECTIONS = [
+  {
+    key: 'OFFLINE', view: 'CASINO_OFF', label: 'オフラインカジノ', icon: '🎰',
+    tone: 'from-purple-900/70 to-indigo-950',
+    note: '相手はハウス。12卓をひとりで、いつでも',
+    games: 'スロット／ルーレット／レッド＆ブラック／バカラ／大小／ドラゴンタイガー／クラップス／ハイ＆ロー／プリンコ／ケノ／マイン／ブラックジャック',
+  },
+  {
+    key: 'ONLINE', view: 'CASINO_ON', label: 'オンラインカジノ', icon: '🌐',
+    tone: 'from-emerald-900/70 to-teal-950',
+    note: '相手はほかのプレイヤー。通信でつながります',
+    games: 'テキサスホールデム／バーチャルターフ／オンラインじゃんけん／オンライン人生ゲーム',
+  },
+];
 
 /* ==========================================================
    英単語定数
@@ -60,7 +95,7 @@ const LOAN_INTERVAL = 900000;
    投資（人物株）定数
    投資額の10%は対象へ即時還元、残り90%が元本。
    元本は対象の純資産変動率の1/10だけ連動する。
-   例）10,000G投資 → 1,000G還元 / 元本9,000G。対象が+10%成長 → 元本+1%（9,090G）。
+   例）10,000Y投資 → 1,000Y還元 / 元本9,000Y。対象が+10%成長 → 元本+1%（9,090Y）。
    ========================================================== */
 const INVEST_FEE_RATE = 0.1;
 const INVEST_GROWTH_DAMPING = 0.1;
@@ -96,6 +131,12 @@ export default function App() {
   const [ownedTags, setOwnedTags] = useState([]);
   const [stats, setStats] = useState({});
   const [jobChanges, setJobChanges] = useState(0);
+  const [travel, setTravel] = useState({});
+  const [club, setClub] = useState({});
+  const [fly, setFly] = useState(normalizeFly(null));
+  const [wallet, setWallet] = useState({});
+  const [fx, setFx] = useState({ hist: [], lastAt: 0 });
+  const [arena, setArena] = useState(normalizeArena(null));
   const [viewProfile, setViewProfile] = useState(null);
   const [bankId, setBankId] = useState('YUTAPON');
   const [acctType, setAcctType] = useState('ORDINARY');
@@ -188,6 +229,9 @@ export default function App() {
         setOwnedTags(d.ownedTags || []);
         setStats(d.stats || {});
         setJobChanges(d.jobChanges || 0);
+        setTravel(d.travel || {});
+        setClub(d.club || {});
+        setWallet(d.wallet || {});
         setBankId(d.bankId || 'YUTAPON');
         setAcctType(d.acctType || 'ORDINARY');
         setFixedUntil(d.fixedUntil || 0);
@@ -228,6 +272,31 @@ export default function App() {
     return () => { unsub(); unsubC(); };
   }, [user]);
 
+  // YUTAPON FLY（運航実績）の購読。パイロットの給料がここで上がる
+  useEffect(() => {
+    if (!user) return;
+    ensureFly();
+    ensureFx();
+    ensureArena();
+    const unsubA = watchArena(a => setArena(a || normalizeArena(null)));
+    const unsub = watchFly(f => { const v = f || normalizeFly(null); setFly(v); flyRef.current = v.spend || 0; });
+    const unsubFx = watchFx(v => setFx(v || { hist: [], lastAt: 0 }));
+    return () => {
+      try { unsub && unsub(); } catch (e) { /* noop */ }
+      try { unsubFx && unsubFx(); } catch (e) { /* noop */ }
+      try { unsubA && unsubA(); } catch (e) { /* noop */ }
+    };
+  }, [user]);
+
+  /* 為替の記録：1分に1回だけ、いまのレートを1本積む（誰かが開いていれば進む） */
+  useEffect(() => {
+    if (!user || !house) return;
+    const run = () => { tickFx({ house, companies, fly, arena }, fx).catch(() => { }); };
+    run();
+    const iv = setInterval(run, 30000);
+    return () => clearInterval(iv);
+  }, [user, house, companies, fly, arena, fx]);
+
   // ニュース購読
   useEffect(() => {
     if (!user) return;
@@ -251,7 +320,7 @@ export default function App() {
         payDepositInterest(interest).then(paid => {
           if (paid > 0) {
             updateDoc(docRef, { bankBalance: increment(paid), lastInterestTime: Date.now() });
-            showToast(`🏦 ${bankName} の利子 +${paid.toLocaleString()} G！`, 'success');
+            showToast(`🏦 ${bankName} の利子 +${paid.toLocaleString()} Y！`, 'success');
           } else {
             updateDoc(docRef, { lastInterestTime: Date.now() });
             showToast('🏦 銀行に現金がなく、利息が支払われませんでした。', 'warning');
@@ -282,7 +351,7 @@ export default function App() {
       if (interest > 0) {
         updateDoc(docRef, { loanBalance: increment(interest), lastLoanTime: Date.now() });
         houseLoanInterest(interest);
-        showToast(`💸 ローン利息 +${interest.toLocaleString()} G！`, 'warning');
+        showToast(`💸 ローン利息 +${interest.toLocaleString()} Y！`, 'warning');
       }
     }, LOAN_INTERVAL);
     return () => clearInterval(timer);
@@ -290,7 +359,7 @@ export default function App() {
 
   // ランキング購読
   useEffect(() => {
-    if (!user || (view !== 'RANKING' && view !== 'MENU' && view !== 'SHOP')) return;
+    if (!user || !['RANKING', 'MENU', 'SHOP', 'SCHOOL', 'CLUB'].includes(view)) return;
     const collRef = collection(db, 'artifacts', appId, 'public', 'data', 'players');
     const unsub = onSnapshot(collRef, snap => {
       const players = [];
@@ -311,6 +380,9 @@ export default function App() {
           gold: data.gold || 0,
           job: data.job || null,
           edu: data.edu || {},
+          club: data.club || null,
+          travel: data.travel || null,
+          wallet: data.wallet || {},
           licenses: data.licenses || [],
           profile: data.profile || {},
           workExp: data.workExp || 0,
@@ -354,7 +426,7 @@ export default function App() {
       if ((data.balance || 0) >= price) {
         await updateDoc(docRef, { balance: increment(-price), vipSubUntil: Date.now() + VIP_SUB_MS });
         houseShop(price);
-        showToast(`👑 VIP定期購入を更新しました（-${price.toLocaleString()} G）`, 'info');
+        showToast(`👑 VIP定期購入を更新しました（-${price.toLocaleString()} Y）`, 'info');
       } else {
         await updateDoc(docRef, { vipSubUntil: 0 });
         showToast('👑 所持金が足りず、VIP定期購入は自動解約されました。', 'warning');
@@ -365,6 +437,7 @@ export default function App() {
 
   /** 給料日（不在中のぶんもまとめて支給。貯まりすぎないよう上限あり） */
   const salaryBusyRef = useRef(false);
+  const flyRef = useRef(0);
   const calcSalary = async (data, docRef) => {
     const j = data.job;
     if (!j || !workCareerOf(j.key) || salaryBusyRef.current) return;
@@ -372,18 +445,34 @@ export default function App() {
     const last = j.lastPayAt || j.hiredAt || now;
     const periods = Math.min(PAY_MAX_PERIODS, Math.floor((now - last) / PAY_INTERVAL));
     if (periods <= 0) return;
-    const amount = salaryOf(j, eduLevelOf(data.edu || {}), data.vip === true || (data.vipSubUntil || 0) > Date.now()) * periods;
+    const amount = salaryOf(
+      j, eduLevelOf(data.edu || {}),
+      data.vip === true || (data.vipSubUntil || 0) > Date.now(),
+      { flySpend: flyRef.current, fame: data.club?.fame || 0 },
+    ) * periods;
     if (amount <= 0) return;
     salaryBusyRef.current = true;
     try {
+      // パイロットは、運賃の2割がたまる「パイロットの取り分」からも配分を受け取る
+      let share = 0;
+      if (j.key === 'PILOTJOB') {
+        share = await claimPilotPay(Math.round(amount * 0.5));
+      }
+      const total = amount + share;
       const nj = { ...j, lastPayAt: last + periods * PAY_INTERVAL, exp: (j.exp || 0) + 5 * periods };
       await updateDoc(docRef, {
-        balance: increment(amount), job: nj,
+        balance: increment(total), job: nj,
         workExp: increment(5 * periods),
         [`jobRecord.${j.key}`]: { rank: nj.rank || 0, exp: nj.exp || 0 },
       });
-      if (workCareerOf(j.key)?.group) housePayroll(amount);
-      showToast(`💼 給料日！ ${workCareerOf(j.key).name}・${workRankOf(j.rank).name} +${amount.toLocaleString()} G（${periods}回分）`, 'success');
+      const grp = workCareerOf(j.key)?.group;
+      if (grp === 'FLY') flyPayroll(amount);
+      else if (grp) housePayroll(amount);
+      showToast(
+        `💼 給料日！ ${workCareerOf(j.key).name}・${workRankOf(j.rank).name} +${total.toLocaleString()} Y（${periods}回分`
+        + `${share > 0 ? `・うち運賃配分 ${share.toLocaleString()} Y` : ''}）`,
+        'success',
+      );
     } catch (e) { /* noop */ }
     finally { setTimeout(() => { salaryBusyRef.current = false; }, 2000); }
   };
@@ -411,6 +500,16 @@ export default function App() {
     await updateDoc(playerRef(playerName), patch);
   }, [playerName, playerRef]);
 
+  /** 旅行・部活・財布の保存（どれもプレイヤー文書のドット記法パッチ） */
+  const saveTravel = saveWork;
+  const saveClub = saveWork;
+  const saveWallet = saveWork;
+  /** 部活で入った経験値 */
+  const addWorkExp = useCallback(async (n) => {
+    if (!playerName || !n) return;
+    await updateDoc(playerRef(playerName), { workExp: increment(Math.round(n)) });
+  }, [playerName, playerRef]);
+
   const calcOfflineInterest = async (data, docRef) => {
     const now = Date.now();
     const diff = now - (data.lastInterestTime || now);
@@ -426,7 +525,7 @@ export default function App() {
       if (total > 0) {
         const paid = await payDepositInterest(total);
         await updateDoc(docRef, { ...(paid > 0 ? { bankBalance: increment(paid) } : {}), lastInterestTime: now });
-        if (paid > 0) showToast(`🏦 不在中の利子 +${paid.toLocaleString()} G！`, 'success');
+        if (paid > 0) showToast(`🏦 不在中の利子 +${paid.toLocaleString()} Y！`, 'success');
       } else {
         await updateDoc(docRef, { lastInterestTime: now });
       }
@@ -443,7 +542,7 @@ export default function App() {
       if (total > 0) houseLoanInterest(total);
       if (total > 0) {
         await updateDoc(docRef, { loanBalance: increment(total), lastLoanTime: now });
-        showToast(`💸 不在中のローン利息 +${total.toLocaleString()} G`, 'warning');
+        showToast(`💸 不在中のローン利息 +${total.toLocaleString()} Y`, 'warning');
       } else {
         await updateDoc(docRef, { lastLoanTime: now });
       }
@@ -492,10 +591,33 @@ export default function App() {
   }, [updateBalance]);
 
   /** YUTAPON グループ社員が働いた成果 */
+  /** プレイヤーの航空会社に運賃を払う（8割は会社、2割はパイロットのプール） */
+  const onAirlineFare = useCallback(async (corpId, amount) => {
+    const total = Math.max(0, Math.round(amount || 0));
+    if (!corpId || total <= 0) return false;
+    const toPilots = Math.round(total * 0.2);
+    const toCompany = total - toPilots;
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'companies', corpId);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return;
+        tx.update(ref, {
+          capital: increment(toCompany), airFares: increment(total),
+          flights: increment(1), updatedAt: Date.now(),
+        });
+      });
+    } catch (e) { return false; }
+    // パイロットの取り分は YUTAPON-FLY のプールに合流させる
+    try { await payPilotPool(toPilots); } catch (e) { /* noop */ }
+    return true;
+  }, []);
+
   const onGroupWork = useCallback((group, earned, paid) => {
-    if (group === 'BANK') houseLoanInterest(Math.max(0, Math.round(earned || 0)));
-    else houseCasino(Math.max(0, Math.round(earned || 0)));
-    if (paid > 0) housePayroll(Math.round(paid));
+    const e = Math.max(0, Math.round(earned || 0));
+    if (group === 'BANK') { houseLoanInterest(e); if (paid > 0) housePayroll(Math.round(paid)); }
+    else if (group === 'FLY') { flyPayroll(Math.round(paid || 0) - e); }
+    else { houseCasino(e); if (paid > 0) housePayroll(Math.round(paid)); }
   }, []);
 
   const addTransferHistory = async (entry) => {
@@ -526,11 +648,20 @@ export default function App() {
   const claimRelief = async () => {
     if (balance < 100 && bankBalance < 100) {
       await updateBalance(1000);
-      showToast('【救済】1,000G を受け取りました！', 'success');
+      showToast('【救済】1,000Y を受け取りました！', 'success');
     } else showToast('まだ資産があります！', 'error');
   };
 
   const emitNews = useCallback((msg, type) => { postNews(db, appId, msg, type); }, []);
+
+  /* ---------- いまいる国（YUTAPON FLY で移動する） ---------- */
+  const trav = useMemo(() => normalizeTravel(travel), [travel]);
+  const myCountry = trav.country || 'HOME';
+  const myCountryInfo = countryOf(myCountry) || COUNTRIES[0];
+  const myClub = useMemo(() => normalizeClub(club), [club]);
+  const myWallet = useMemo(() => normalizeWallet(wallet), [wallet]);
+  const fxCtx = useMemo(() => ({ house, companies, fly, arena }), [house, companies, fly, arena]);
+  const walletG = useMemo(() => walletValue(myWallet, fxCtx), [myWallet, fxCtx]);
 
   /* ---------- VIP・ショップ ---------- */
   const delinq = useMemo(() => loanState(loanBalance, loanStartAt), [loanBalance, loanStartAt, newsTick]);
@@ -559,14 +690,36 @@ export default function App() {
   const myCompanies = useMemo(() => companies.filter(c => c.owner === playerName), [companies, playerName]);
 
   /* ---------- 長者番付（プレイヤー／企業／すべて） ---------- */
+  /* YUTAPON-GROUP（3つの部署をまとめた親会社） */
+  const groupRow = useMemo(() => ({
+    name: 'YUTAPON-GROUP', isGroup: true, isHouse: true, kind: 'CORP',
+    balance: 0, bankBalance: 0, loanBalance: 0, gold: 0, job: null,
+    creditScore: 999, vip: true, createdAt: 0,
+    depts: [
+      { key: 'FLY', name: 'YUTAPON-FLY', icon: '🛫', total: flyTotal(fly), note: `${(fly?.flights || 0).toLocaleString()} 便` },
+      { key: 'BANK', name: 'YUTAPON-BANK', icon: '🏦', total: houseTotal(house || { bankAssets: HOUSE_START }), note: `預かり ${bigYen(house?.depositFlow || 0)}` },
+      { key: 'CASINO', name: 'YUTAPON-CASINO', icon: '🎰', total: 0, note: `カジノ収支 ${bigYen(house?.casinoTake || 0)}` },
+    ],
+    profit: 0,
+    total: houseTotal(house || { bankAssets: HOUSE_START }) + flyTotal(fly),
+  }), [house, fly]);
+
   const houseRow = useMemo(() => ({
-    name: 'YUTAPON-BANK', isBank: true, isHouse: true, kind: 'CORP',
+    name: 'YUTAPON-BANK', isBank: true, isHouse: true, isDept: true, dept: 'BANK', kind: 'CORP',
     balance: 0, bankBalance: house?.depositFlow || 0, loanBalance: 0, gold: 0, job: null,
     creditScore: 999, vip: true, createdAt: 0,
     deposits: Math.max(0, house?.depositFlow || 0), loans: Math.max(0, house?.loansOut || 0),
     casinoTake: house?.casinoTake || 0, corpTax: house?.corpTax || 0,
     profit: 0, total: houseTotal(house || { bankAssets: HOUSE_START }),
   }), [house]);
+
+  const flyRow = useMemo(() => ({
+    name: 'YUTAPON-FLY', isFly: true, isHouse: true, isDept: true, dept: 'FLY', kind: 'CORP',
+    balance: 0, bankBalance: 0, loanBalance: 0, gold: 0, job: null,
+    creditScore: 999, vip: true, createdAt: 0,
+    flights: fly?.flights || 0, spend: fly?.spend || 0, pilotPool: fly?.pilotPool || 0,
+    profit: 0, total: flyTotal(fly),
+  }), [fly]);
 
   const corpRows = useMemo(() => companies.map(c => ({
     name: c.name, kind: 'CORP', isCompany: true, isBank: !!c.isBank,
@@ -576,18 +729,22 @@ export default function App() {
   })), [companies]);
 
   const rankingData = useMemo(() => {
-    const people = playerRows.map(p => ({ ...p, kind: 'PLAYER' }));
+    // 外貨も G に直して資産に足す
+    const people = playerRows.map(p => {
+      const fw = walletValue(p.wallet, fxCtx);
+      return { ...p, kind: 'PLAYER', walletG: fw, total: p.total + fw, profit: p.profit + fw };
+    });
     if (rankTab === 'PLAYER') return [...people].sort((a, b) => b.total - a.total);
-    if (rankTab === 'CORP') return [houseRow, ...corpRows].sort((a, b) => b.total - a.total);
-    return [...people, houseRow, ...corpRows].sort((a, b) => b.total - a.total);
-  }, [playerRows, corpRows, houseRow, rankTab]);
+    if (rankTab === 'CORP') return [groupRow, houseRow, flyRow, ...corpRows].sort((a, b) => b.total - a.total);
+    return [...people, groupRow, houseRow, flyRow, ...corpRows].sort((a, b) => b.total - a.total);
+  }, [playerRows, corpRows, groupRow, houseRow, flyRow, rankTab, fxCtx]);
 
   // 背景色（下までスクロールしても白くならないように）
   useEffect(() => {
-    const c = vipActive ? '#140b05' : '#07100c';
+    const c = vipActive ? '#140b05' : myCountry === 'GAMBLE' ? '#14060a' : myCountry === 'WORK' ? '#080d14' : '#07100c';
     document.documentElement.style.backgroundColor = c;
     document.body.style.backgroundColor = c;
-  }, [vipActive]);
+  }, [vipActive, myCountry]);
 
   // 延滞に入った／解けたときのお知らせ
   const wasDelinqRef = useRef(false);
@@ -654,13 +811,13 @@ export default function App() {
       if (balance < cost) { showToast('所持金が足りません。', 'error'); return; }
       await updateDoc(playerRef(playerName), { balance: increment(-cost), gold: increment(n) }).catch(() => { });
       houseShop(cost);
-      showToast(`🥇 金を ${n} 本 購入しました（-${cost.toLocaleString()} G）`, 'success');
+      showToast(`🥇 金を ${n} 本 購入しました（-${cost.toLocaleString()} Y）`, 'success');
     } else {
       if (gold < n) { showToast('保有している金が足りません。', 'error'); return; }
       const got = goldSellPrice(goldPx) * n;
       await updateDoc(playerRef(playerName), { balance: increment(got), gold: increment(-n) }).catch(() => { });
       houseShop(-got);
-      showToast(`🥇 金を ${n} 本 売却しました（+${got.toLocaleString()} G）`, 'success');
+      showToast(`🥇 金を ${n} 本 売却しました（+${got.toLocaleString()} Y）`, 'success');
     }
   }, [delinq.delinquent, balance, gold, goldPx, playerName, playerRef, showToast]);
 
@@ -779,7 +936,7 @@ export default function App() {
           ...(creditBonus > 0 ? { creditScore: increment(creditBonus) } : {}),
         });
         if (moved < amount) await updateBalance(amount - moved).catch(() => { });
-        showToast(`🏦 ${bankName} に ${moved.toLocaleString()} G 預け入れました。${creditBonus > 0 ? ` 信用度 +${creditBonus}` : ''}`, 'success');
+        showToast(`🏦 ${bankName} に ${moved.toLocaleString()} Y 預け入れました。${creditBonus > 0 ? ` 信用度 +${creditBonus}` : ''}`, 'success');
       } else {
         if (bankBalance < amount) { showToast('預金残高が足りません！', 'error'); return; }
         if (acct.lockMs > 0 && Date.now() < fixedUntil) {
@@ -791,7 +948,7 @@ export default function App() {
         catch (e) { showToast('銀行に現金がなく、引き出せませんでした。', 'error'); return; }
         await updateDoc(docRef, { bankBalance: increment(-moved) });
         await updateBalance(moved);
-        showToast(`🏦 ${moved.toLocaleString()} G 引き出しました。`, 'success');
+        showToast(`🏦 ${moved.toLocaleString()} Y 引き出しました。`, 'success');
       }
       setBankInput('');
     } finally { bankBusyRef.current = false; }
@@ -820,7 +977,7 @@ export default function App() {
     if (isNaN(amount) || amount <= 0) { showToast('有効な数値を入力してください。', 'error'); return; }
     if (loanLimit <= 0) { showToast('信用度が不足していて借入できません。', 'error'); return; }
     if (loanBalance + amount > loanLimit) {
-      showToast(`上限 ${loanLimit.toLocaleString()} G まで借りられます！`, 'error'); return;
+      showToast(`上限 ${loanLimit.toLocaleString()} Y まで借りられます！`, 'error'); return;
     }
     bankBusyRef.current = true;
     try {
@@ -832,7 +989,7 @@ export default function App() {
         ...(loanBalance <= 0 ? { loanStartAt: Date.now() } : {}),
       });
       await houseLend(amount);
-      showToast(`💰 ${amount.toLocaleString()} G 借入しました。信用度 -5`, 'warning');
+      showToast(`💰 ${amount.toLocaleString()} Y 借入しました。信用度 -5`, 'warning');
       setLoanInput('');
     } finally { bankBusyRef.current = false; }
   };
@@ -854,8 +1011,8 @@ export default function App() {
       });
       await houseRepay(amount);
       showToast(willClear
-        ? `✅ ${amount.toLocaleString()} G 返済！ローンを完済しました。`
-        : `✅ ${amount.toLocaleString()} G 返済！信用度 -15`, willClear ? 'success' : 'warning');
+        ? `✅ ${amount.toLocaleString()} Y 返済！ローンを完済しました。`
+        : `✅ ${amount.toLocaleString()} Y 返済！信用度 -15`, willClear ? 'success' : 'warning');
       setLoanInput('');
     } finally { bankBusyRef.current = false; }
   };
@@ -882,9 +1039,9 @@ export default function App() {
         transferHistory: [{ type: 'RECEIVED', from: playerName, amount, at: now }, ...targetHistory].slice(0, 30)
       });
       if (amount >= 50000) {
-        await postNews(db, appId, `💸 ${playerName} → ${target} へ ${amount.toLocaleString()} G の大口送金！`, 'transfer');
+        await postNews(db, appId, `💸 ${playerName} → ${target} へ ${amount.toLocaleString()} Y の大口送金！`, 'transfer');
       }
-      showToast(`💸 ${target} へ ${amount.toLocaleString()} G 送金！`, 'success');
+      showToast(`💸 ${target} へ ${amount.toLocaleString()} Y 送金！`, 'success');
       setTransferTarget(''); setTransferAmount(''); setView('MENU');
     } catch (e) { showToast('送金エラー', 'error'); }
   };
@@ -910,20 +1067,11 @@ export default function App() {
     vip: 'text-amber-200 font-bold',
   };
 
-  const gameCards = [
-    { id: 'SLOT', tag: 'Casino', title: 'SLOT MACHINE', desc: '3Dリール・24コマ実機仕様・還元率96%', emoji: '🎰', ring: 'from-purple-900/70 to-indigo-950' },
-    { id: 'ROULETTE', tag: 'Casino', title: 'NUMBER ROULETTE', desc: '数字エリア・矢印位置で厳密判定', emoji: '🎡', ring: 'from-red-900/70 to-rose-950' },
-    { id: 'REDBLACK', tag: 'Casino', title: 'RED & BLACK', desc: '3D欧州式ホイール・本格ベットテーブル', emoji: '🔴', ring: 'from-rose-900/70 to-neutral-950' },
-    { id: 'POKER', tag: 'Card Room', title: "TEXAS HOLD'EM", desc: '6人テーブル・SB/BB・サイドポット対応', emoji: '🃏', ring: 'from-emerald-900/70 to-green-950' },
-    { id: 'RACE', tag: 'Racing', title: 'VIRTUAL TURF', desc: '能力非公開・50種スキル・公開レース対応', emoji: '🏇', ring: 'from-lime-900/70 to-emerald-950' },
-    { id: 'BLACKJACK', tag: 'VIP Room', title: 'BLACKJACK', desc: '6デッキ・3:2配当・スプリット/ダブル対応', emoji: '🃏', ring: 'from-amber-900/70 to-yellow-950', vipOnly: true },
-    { id: 'JANKEN', tag: 'Online', title: 'オンラインじゃんけん', desc: 'ルーム制2人対戦・チャット付き', emoji: '✊', ring: 'from-pink-900/70 to-rose-950' },
-    { id: 'LIFE', tag: 'Online', title: 'オンライン人生ゲーム', desc: '最大6人・ルーレットで進む人生の盤上ゲーム', emoji: '🎲', ring: 'from-indigo-900/70 to-slate-950' },
-  ];
+
 
   if (loadingMsg) return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-[#07100c] text-white">
-      <FeltBackdrop vip={vipActive} />
+      <FeltBackdrop vip={vipActive} country={myCountry} />
       <RefreshCw className="animate-spin text-amber-400 mb-4" size={48} />
       <p className="font-bold text-lg tracking-widest">{loadingMsg}</p>
     </div>
@@ -931,7 +1079,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen text-white font-sans relative flex flex-col justify-between">
-      <FeltBackdrop vip={vipActive} />
+      <FeltBackdrop vip={vipActive} country={myCountry} />
 
       {toastMsg && (
         <div className={`fixed top-4 left-1/2 -translate-x-1/2 z-[60] px-6 py-3 rounded-full shadow-2xl flex items-center gap-2 font-bold max-w-[90vw] text-center ${toastColors[toastType]}`}>
@@ -995,18 +1143,26 @@ export default function App() {
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-3">
+                <button onClick={() => setView('TRAVEL')}
+                  className="bg-black/50 border border-sky-500/25 hover:border-sky-400/60 px-4 py-3 rounded-2xl flex items-center gap-3 transition">
+                  <span className="text-xl leading-none">{myCountryInfo.icon}</span>
+                  <div className="text-left">
+                    <span className="text-[10px] text-gray-400 font-bold block">現在地</span>
+                    <span className="text-sm font-black text-sky-200">{myCountryInfo.short || myCountryInfo.name}</span>
+                  </div>
+                </button>
                 <div className="bg-black/50 border border-amber-500/20 px-4 py-3 rounded-2xl flex items-center gap-3">
                   <Coins className="text-amber-400" size={20} />
-                  <div><span className="text-[10px] text-gray-400 font-bold block">所持金</span><span className="font-mono text-lg font-black text-amber-300">{balance.toLocaleString()} G</span></div>
+                  <div><span className="text-[10px] text-gray-400 font-bold block">所持金</span><span className="font-mono text-lg font-black text-amber-300">{balance.toLocaleString()} Y</span></div>
                 </div>
                 <div className="bg-black/50 border border-emerald-500/20 px-4 py-3 rounded-2xl flex items-center gap-3">
                   <Landmark className="text-emerald-400" size={20} />
-                  <div><span className="text-[10px] text-gray-400 font-bold block">銀行残高</span><span className="font-mono text-lg font-black text-emerald-300">{bankBalance.toLocaleString()} G</span></div>
+                  <div><span className="text-[10px] text-gray-400 font-bold block">銀行残高</span><span className="font-mono text-lg font-black text-emerald-300">{bankBalance.toLocaleString()} Y</span></div>
                 </div>
                 {loanBalance > 0 && (
                   <div className="bg-black/50 border border-red-500/30 px-4 py-3 rounded-2xl flex items-center gap-3">
                     <TrendingDown className="text-red-400" size={20} />
-                    <div><span className="text-[10px] text-gray-400 font-bold block">ローン残高</span><span className="font-mono text-lg font-black text-red-300">{loanBalance.toLocaleString()} G</span></div>
+                    <div><span className="text-[10px] text-gray-400 font-bold block">ローン残高</span><span className="font-mono text-lg font-black text-red-300">{loanBalance.toLocaleString()} Y</span></div>
                   </div>
                 )}
               </div>
@@ -1015,38 +1171,47 @@ export default function App() {
             <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
               <div className="xl:col-span-2 space-y-6">
                 <div>
-                  <p className="text-[11px] text-amber-200/50 uppercase tracking-[0.3em] font-bold mb-3">Game Floor</p>
+                  <p className="text-[11px] text-amber-200/50 uppercase tracking-[0.3em] font-bold mb-3">Casino</p>
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {gameCards.filter(g => g.id !== 'RACE' || HORSE_RACING_EVENT_ACTIVE).map(g => {
-                      const needsVip = g.vipOnly && !vipActive;
-                      const locked = g.locked;
-                      return (
-                        <button key={g.id}
-                          onClick={() => {
-                            if (locked) { showToast('オンライン人生ゲームは準備中です。もう少しお待ちください！', 'info'); return; }
-                            if (needsVip) { showToast('ブラックジャックはVIP会員限定です。ショップでVIP券をどうぞ。', 'warning'); setView('SHOP'); return; }
-                            setView(g.id);
-                          }}
-                          className={`group relative overflow-hidden bg-gradient-to-br ${g.ring} p-6 rounded-3xl shadow-2xl border transition-all transform text-left
-                            ${locked ? 'border-white/5 opacity-55 cursor-not-allowed'
-                              : needsVip ? 'border-amber-400/25 hover:border-amber-300/60 hover:-translate-y-1'
-                                : 'border-white/10 hover:border-amber-400/50 hover:-translate-y-1'}`}>
-                          <div className="absolute -top-6 -right-4 text-[110px] leading-none opacity-10 group-hover:opacity-20 transition select-none">{g.emoji}</div>
-                          <div className="flex items-center gap-2 mb-3">
-                            <span className="bg-black/40 text-amber-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] inline-block border border-amber-300/20">{g.tag}</span>
-                            {g.vipOnly && <VipBadge size="xs" />}
-                            {locked && <span className="flex items-center gap-1 bg-black/50 text-gray-400 text-[10px] font-black px-2 py-1 rounded-full border border-white/10"><Lock size={10} />{g.lockNote}</span>}
-                          </div>
-                          <h2 className="text-xl font-extrabold text-white mb-1 group-hover:text-amber-200 transition">{g.title}</h2>
-                          <p className="text-gray-400 text-sm">{g.desc}</p>
-                          {needsVip && <p className="text-[11px] text-amber-300/80 font-bold mt-1">VIP会員になると遊べます</p>}
-                        </button>
-                      );
-                    })}
+                    {(myCountry === 'SPORT'
+                      ? [{ key: 'ARENA', view: 'ARENA', label: 'スポーツアリーナ', icon: '🏟️', tone: 'from-rose-900/70 to-pink-950', note: 'この国にカジノはない。かわりに競技場がある', games: '賞金マッチ／エキシビション／ランキング戦' }]
+                      : CASINO_SECTIONS
+                    ).map(sec => (
+                      <button key={sec.key} onClick={() => setView(sec.view)}
+                        className={`group relative overflow-hidden bg-gradient-to-br ${sec.tone} p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-amber-400/50 transition-all transform hover:-translate-y-1 text-left`}>
+                        <div className="absolute -top-8 -right-5 text-[132px] leading-none opacity-10 group-hover:opacity-20 transition select-none">{sec.icon}</div>
+                        <h2 className="text-2xl font-extrabold text-white mb-1 group-hover:text-amber-200 transition">{sec.icon} {sec.label}</h2>
+                        <p className="text-gray-300 text-[13px] font-bold mb-1.5">{sec.note}</p>
+                        <p className="text-gray-500 text-[11px] leading-snug">{sec.games}</p>
+                        {sec.key === 'OFFLINE' && myCountry === 'GAMBLE' && (
+                          <span className="inline-block mt-2 bg-amber-400 text-black text-[10px] font-black px-2 py-0.5 rounded-full">ハイローラー卓 ×100</span>
+                        )}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
+
                 <div>
+                  <p className="text-[11px] text-amber-200/50 uppercase tracking-[0.3em] font-bold mb-3">World</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                    <button onClick={() => setView('TRAVEL')} className="group relative overflow-hidden bg-gradient-to-br from-sky-900/70 to-blue-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-sky-400/40 transition-all transform hover:-translate-y-1 text-left">
+                      <div className="absolute -top-4 -right-4 text-sky-400/10 group-hover:text-sky-300/20 transition"><Plane size={110} /></div>
+                      <span className="bg-black/40 text-sky-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-sky-300/20">YUTAPON FLY</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1">旅行</h2>
+                      <p className="text-gray-400 text-sm">
+                        {myCountryInfo.icon} いま {myCountryInfo.name}・4か国を行き来できる
+                      </p>
+                    </button>
+                    <button onClick={() => setView('CLUB')} className="group relative overflow-hidden bg-gradient-to-br from-rose-900/70 to-pink-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-rose-400/40 transition-all transform hover:-translate-y-1 text-left">
+                      <div className="absolute -top-4 -right-4 text-rose-400/10 group-hover:text-rose-300/20 transition"><Trophy size={110} /></div>
+                      <span className="bg-black/40 text-rose-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-rose-300/20">Club</span>
+                      <h2 className="text-xl font-extrabold text-white mb-1">部活・サークル</h2>
+                      <p className="text-gray-400 text-sm">
+                        {myClub.key ? `実力 ${Math.round(myClub.skill).toLocaleString()}・名声 ${Math.round(myClub.fame).toLocaleString()}` : '甲子園・総合大会・36の部活'}
+                      </p>
+                    </button>
+                  </div>
                   <p className="text-[11px] text-amber-200/50 uppercase tracking-[0.3em] font-bold mb-3">Work</p>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <button onClick={() => setView('SCHOOL')} className="group relative overflow-hidden bg-gradient-to-br from-emerald-900/70 to-teal-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-emerald-400/40 transition-all transform hover:-translate-y-1 text-left">
@@ -1054,7 +1219,9 @@ export default function App() {
                       <span className="bg-black/40 text-emerald-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-emerald-300/20">Academy</span>
                       <h2 className="text-xl font-extrabold text-white mb-1">学校・塾</h2>
                       <p className="text-gray-400 text-sm">
-                        {eduLevel > 0 ? `${EDU_NAME[eduLevel]}・高校10校/大学9校/専門4校` : '高校10校・大学9校・専門4校・塾'}
+                        {eduLevel > 0
+                          ? `${EDU_NAME[eduLevel]}・${myCountryInfo.short} の学校へ`
+                          : `${myCountryInfo.short} の高校・大学・専門学校・塾`}
                       </p>
                     </button>
                     <button onClick={() => setView('LABOR')} className="group relative overflow-hidden bg-gradient-to-br from-sky-900/70 to-cyan-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-sky-400/40 transition-all transform hover:-translate-y-1 text-left">
@@ -1062,7 +1229,7 @@ export default function App() {
                       <span className="bg-black/40 text-sky-200 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-[0.2em] mb-3 inline-block border border-sky-300/20">Work</span>
                       <h2 className="text-xl font-extrabold text-white mb-1">仕事</h2>
                       <p className="text-gray-400 text-sm">
-                        {job ? `${jobLabel(job)}・給料 ${salaryOf(job).toLocaleString()}G` : 'アルバイト14種・資格16種・就職14職'}
+                        {job ? `${jobLabel(job)}・給料 ${salaryOf(job, eduLevel, vipActive, { flySpend: fly.spend, fame: myClub.fame }).toLocaleString()}Y` : 'アルバイト14種・資格16種・就職15職'}
                       </p>
                     </button>
                     <button onClick={() => setView('CORP')} className="group relative overflow-hidden bg-gradient-to-br from-indigo-900/70 to-slate-950 p-6 rounded-3xl shadow-2xl border border-white/10 hover:border-indigo-400/40 transition-all transform hover:-translate-y-1 text-left">
@@ -1071,7 +1238,7 @@ export default function App() {
                       <h2 className="text-xl font-extrabold text-white mb-1">起業</h2>
                       <p className="text-gray-400 text-sm">
                         {myCompanies.length > 0
-                          ? `${myCompanies.length}社を経営中・総資産 ${myCompanies.reduce((a, c) => a + (c.capital || 0), 0).toLocaleString()}G`
+                          ? `${myCompanies.length}社を経営中・総資産 ${myCompanies.reduce((a, c) => a + (c.capital || 0), 0).toLocaleString()}Y`
                           : '会社を作って育てる・企業投資もできる'}
                       </p>
                     </button>
@@ -1082,6 +1249,7 @@ export default function App() {
                   {[
                     { id: 'SHOP', label: 'ショップ', sub: delinq.delinquent ? '延滞中・利用停止' : vipActive ? 'VIP会員です' : '道具・金・VIP券', icon: <ShoppingBag size={20} />, tone: delinq.delinquent ? 'text-red-400' : 'text-amber-300' },
                     { id: 'BANK', label: '銀行', sub: '口座を選んで預金・借入', icon: <Landmark size={20} />, tone: 'text-emerald-300' },
+                    { id: 'EXCHANGE', label: '両替所', sub: walletG > 0 ? `外貨 ${walletG.toLocaleString()} Y ぶん` : 'G ↔ BC ↔ WD の為替', icon: <ArrowLeftRight size={20} />, tone: 'text-violet-300' },
                     { id: 'TRANSFER', label: 'オンライン送金', sub: '他プレイヤーへ送金', icon: <Send size={20} />, tone: 'text-sky-300' },
                     { id: 'INVEST', label: '人物株投資', sub: '他プレイヤーに投資', icon: <TrendingUp size={20} />, tone: 'text-cyan-300' },
                     { id: 'RANKING', label: '長者番付', sub: 'プレイヤーと企業', icon: <Trophy size={20} />, tone: 'text-amber-300' },
@@ -1101,7 +1269,7 @@ export default function App() {
                   <div className="flex gap-8">
                     <div className="text-center">
                       <span className="text-[10px] text-gray-400 uppercase font-bold tracking-widest block mb-1">純資産</span>
-                      <span className="text-2xl font-black font-mono text-amber-300">{(balance + bankBalance - loanBalance).toLocaleString()} G</span>
+                      <span className="text-2xl font-black font-mono text-amber-300">{(balance + bankBalance - loanBalance).toLocaleString()} Y</span>
                     </div>
                     <div className="text-center">
                       <span className="text-[10px] text-gray-400 uppercase font-bold tracking-widest block mb-1">信用度</span>
@@ -1110,7 +1278,7 @@ export default function App() {
                   </div>
                   {balance < 100 && bankBalance < 100 && (
                     <button onClick={claimRelief} className="bg-red-500/10 text-red-300 hover:bg-red-500 hover:text-white px-5 py-2.5 rounded-xl text-sm font-bold border border-red-500/30 transition">
-                      救済資金 1,000G を申請する
+                      救済資金 1,000Y を申請する
                     </button>
                   )}
                 </Panel>
@@ -1178,7 +1346,7 @@ export default function App() {
                           <span className="text-gray-600 ml-2">{formatTime(h.at)}</span>
                         </div>
                         <span className={`font-mono font-black ${h.type === 'SENT' ? 'text-red-300' : 'text-emerald-300'}`}>
-                          {h.type === 'SENT' ? '-' : '+'}{(h.amount || 0).toLocaleString()}G
+                          {h.type === 'SENT' ? '-' : '+'}{(h.amount || 0).toLocaleString()}Y
                         </span>
                       </div>
                     ))}
@@ -1202,7 +1370,7 @@ export default function App() {
               saveWork={saveWork} rankingData={rankingData} onGroupWork={onGroupWork}
               miningBalance={casinoBalance} edu={edu} vip={vipActive}
               companies={companies} onCorpWork={onCorpWork} items={items} onUseItem={useItem}
-              jobChanges={jobChanges} />
+              jobChanges={jobChanges} club={myClub} flySpend={fly.spend} />
           </ErrorBoundary>
         )}
         {view === 'SCHOOL' && (
@@ -1210,7 +1378,49 @@ export default function App() {
             <SchoolView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
               showToast={showToast} playerName={playerName} emitNews={emitNews}
               edu={edu} licenses={licenses} items={items} workExp={workExp} saveEdu={saveWork}
-              onUseItem={useItem} vip={vipActive} />
+              onUseItem={useItem} vip={vipActive}
+              players={playerRows} country={myCountry} club={myClub} />
+          </ErrorBoundary>
+        )}
+        {view === 'TRAVEL' && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <TravelView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
+              showToast={showToast} playerName={playerName} emitNews={emitNews}
+              travel={travel} saveTravel={saveTravel} vip={vipActive} licenses={licenses}
+              job={job} wallet={wallet} saveWallet={saveWallet} house={house} companies={companies}
+              arena={arena} onAirlineFare={onAirlineFare} />
+          </ErrorBoundary>
+        )}
+        {view === 'CLUB' && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <ClubView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
+              showToast={showToast} playerName={playerName} emitNews={emitNews}
+              edu={edu} club={club} saveClub={saveClub} players={playerRows}
+              workExp={workExp} saveWorkExp={addWorkExp} />
+          </ErrorBoundary>
+        )}
+        {view === 'EXCHANGE' && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <ExchangeView balance={balance} updateBalance={updateBalance} onBack={() => setView('MENU')}
+              showToast={showToast} playerName={playerName}
+              wallet={wallet} saveWallet={saveWallet} vip={vipActive}
+              house={house} companies={companies} fly={fly} arena={arena} fxHistory={fx.hist} country={myCountry} />
+          </ErrorBoundary>
+        )}
+        {view === 'ARENA' && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <ArenaView balance={balance} updateBalance={casinoBalance} onBack={() => setView('MENU')}
+              showToast={showToast} playerName={playerName} emitNews={emitNews}
+              club={club} saveClub={saveClub} arena={arena} workExp={workExp} saveWorkExp={addWorkExp} />
+          </ErrorBoundary>
+        )}
+        {(view === 'CASINO_OFF' || view === 'CASINO_ON') && (
+          <ErrorBoundary onReset={() => setView('MENU')}>
+            <CasinoLobby mode={view === 'CASINO_ON' ? 'ONLINE' : 'OFFLINE'}
+              balance={balance} updateBalance={casinoBalance} onBack={() => setView('MENU')}
+              onPick={(id) => setView(id)}
+              showToast={showToast} playerName={playerName} emitNews={emitNews}
+              vip={vipActive} highRoller={myCountry === 'GAMBLE'} countryName={myCountryInfo.name} />
           </ErrorBoundary>
         )}
         {view === 'PROFILE' && (
@@ -1253,7 +1463,7 @@ export default function App() {
                   {[{ id: 'YUTAPON', name: 'YUTAPON-BANK', rate: INTEREST_RATE_30MIN, sub: 'グループ直営・資産 ' + bigYen(houseTotal(house)) + ' G', safe: true },
                   ...companies.filter(c => c.isBank).map(c => ({
                     id: c.id, name: c.name, rate: c.rate || 0,
-                    sub: `代表 ${c.owner}・支払い余力 ${bankPayable(c).toLocaleString()} G`, safe: bankPayable(c) > 0,
+                    sub: `代表 ${c.owner}・支払い余力 ${bankPayable(c).toLocaleString()} Y`, safe: bankPayable(c) > 0,
                   }))].map(b => (
                     <button key={b.id} onClick={() => switchAccount(b.id, acctType)}
                       className={`p-3 rounded-2xl border-2 text-left transition ${bankId === b.id ? 'border-emerald-400 bg-emerald-500/10' : 'border-white/10 bg-black/40 hover:border-white/25'}`}>
@@ -1296,8 +1506,8 @@ export default function App() {
                   <div className="h-3 rounded-full bg-gradient-to-r from-red-500 via-yellow-500 to-emerald-500 transition-all" style={{ width: `${Math.max(0, Math.min(100, (creditScore / 200) * 100))}%` }} />
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
-                  <div>借入上限: <span className="text-white font-bold">{loanLimit.toLocaleString()} G</span>{acct.loanMul !== 1 && <span className="text-emerald-300 font-bold"> ({acct.name} ×{acct.loanMul})</span>}</div>
-                  <div>借入残高: <span className="text-red-400 font-bold">{loanBalance.toLocaleString()} G</span></div>
+                  <div>借入上限: <span className="text-white font-bold">{loanLimit.toLocaleString()} Y</span>{acct.loanMul !== 1 && <span className="text-emerald-300 font-bold"> ({acct.name} ×{acct.loanMul})</span>}</div>
+                  <div>借入残高: <span className="text-red-400 font-bold">{loanBalance.toLocaleString()} Y</span></div>
                 </div>
               </div>
               <div className="bg-black/30 rounded-xl border border-white/10 p-4 mb-5 text-xs grid grid-cols-2 gap-2">
@@ -1361,7 +1571,7 @@ export default function App() {
               <SectionTitle icon={<Send size={28} />} title="ONLINE TRANSFER" sub="他のプレイヤーへ送金します" />
               <div className="bg-black/40 p-4 rounded-xl border border-white/10 mb-6 flex justify-between">
                 <span className="text-sm text-gray-400 font-bold">所持金</span>
-                <span className="text-xl font-mono font-black text-amber-300">{balance.toLocaleString()} G</span>
+                <span className="text-xl font-mono font-black text-amber-300">{balance.toLocaleString()} Y</span>
               </div>
               <div className="space-y-4 mb-6">
                 <div>
@@ -1398,6 +1608,37 @@ export default function App() {
                   </span>
                 </button>
               )}
+              {/* YUTAPON-GROUP と3つの部署 */}
+              <Panel gold className="p-4 mb-4">
+                <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                  <span className="text-[13px] font-black text-amber-200">🎰 YUTAPON-GROUP</span>
+                  <span className="font-mono text-[13px] font-black text-emerald-300 tabular-nums">
+                    グループ総資産 {bigYen(groupRow.total)} Y
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                  {groupRow.depts.map((d, i) => (
+                    <div key={d.key} className="p-2.5 rounded-2xl bg-black/40 border border-white/10">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-lg leading-none">{d.icon}</span>
+                        <span className="text-[11px] font-black text-white truncate">{d.name}</span>
+                        <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-white/10 text-gray-400 border border-white/10">
+                          格 {i + 1}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-gray-500 mt-0.5">{d.note}</div>
+                      {d.total > 0 && (
+                        <div className="font-mono text-[12px] font-black text-amber-300 tabular-nums">{bigYen(d.total)} Y</div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] text-gray-500 mt-2 leading-relaxed">
+                  ひとつのグループを3つの部署が支えています。格は FLY ＜ BANK ＜ CASINO の順で、
+                  学校からの推薦も部署ごとに分かれています。BANK と CASINO は同じ金庫を共有しています。
+                </p>
+              </Panel>
+
               <div className="grid grid-cols-3 gap-2 mb-4">
                 {[
                   { k: 'ALL', label: 'すべて', icon: <Trophy size={14} /> },
@@ -1436,13 +1677,13 @@ export default function App() {
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
                               <span>{ct?.name || '会社'}</span>
                               <span>代表:{player.owner}</span>
-                              <span className="text-emerald-400/90">通算売上:{player.revenue.toLocaleString()}G</span>
-                              {player.isBank && <span className="text-sky-300">預かり:{player.deposits.toLocaleString()}G</span>}
+                              <span className="text-emerald-400/90">通算売上:{player.revenue.toLocaleString()}Y</span>
+                              {player.isBank && <span className="text-sky-300">預かり:{player.deposits.toLocaleString()}Y</span>}
                               {player.sharesOut > 0 && <span className="text-amber-300">発行株:{player.sharesOut.toLocaleString()}</span>}
                             </div>
                           </div>
                         </div>
-                        <span className="font-mono text-lg md:text-xl font-black text-indigo-300 shrink-0">{player.total.toLocaleString()} G</span>
+                        <span className="font-mono text-lg md:text-xl font-black text-indigo-300 shrink-0">{player.total.toLocaleString()} Y</span>
                       </div>
                     );
                   }
@@ -1459,14 +1700,14 @@ export default function App() {
                               <span className="text-[10px] bg-indigo-400 text-black px-1.5 py-0.5 rounded font-black shrink-0">企業</span>
                             </span>
                             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-400 font-semibold">
-                              <span>預かり:{player.deposits.toLocaleString()}G</span>
-                              <span className="text-amber-300">貸出:{player.loans.toLocaleString()}G</span>
-                              <span className={player.casinoTake >= 0 ? 'text-emerald-400' : 'text-red-400'}>カジノ収支:{player.casinoTake >= 0 ? '+' : ''}{player.casinoTake.toLocaleString()}G</span>
-                              <span className="text-sky-300">法人税:{player.corpTax.toLocaleString()}G</span>
+                              <span>預かり:{player.deposits.toLocaleString()}Y</span>
+                              <span className="text-amber-300">貸出:{player.loans.toLocaleString()}Y</span>
+                              <span className={player.casinoTake >= 0 ? 'text-emerald-400' : 'text-red-400'}>カジノ収支:{player.casinoTake >= 0 ? '+' : ''}{player.casinoTake.toLocaleString()}Y</span>
+                              <span className="text-sky-300">法人税:{player.corpTax.toLocaleString()}Y</span>
                             </div>
                           </div>
                         </div>
-                        <span className="font-mono text-lg md:text-xl font-black text-emerald-300 shrink-0">{bigYen(player.total)} G</span>
+                        <span className="font-mono text-lg md:text-xl font-black text-emerald-300 shrink-0">{bigYen(player.total)} Y</span>
                       </div>
                     );
                   }
@@ -1499,21 +1740,21 @@ export default function App() {
                           {pTags.length > 0 && <div className="flex flex-wrap gap-1 my-0.5"><TagChips tags={pTags} /></div>}
                           {title && <div className="text-[11px] font-bold text-sky-300/90 truncate">{title}</div>}
                           <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-gray-500 font-semibold">
-                            <span>手元:{player.balance.toLocaleString()}G</span>
-                            <span className="text-emerald-400/90">銀行:{player.bankBalance.toLocaleString()}G</span>
-                            <span className={player.loanBalance > 0 ? 'text-red-400' : ''}>ローン:{player.loanBalance.toLocaleString()}G</span>
+                            <span>手元:{player.balance.toLocaleString()}Y</span>
+                            <span className="text-emerald-400/90">銀行:{player.bankBalance.toLocaleString()}Y</span>
+                            <span className={player.loanBalance > 0 ? 'text-red-400' : ''}>ローン:{player.loanBalance.toLocaleString()}Y</span>
                             <span className={player.gold > 0 ? 'text-amber-400' : ''}>金:{player.gold.toLocaleString()}g</span>
                             {vipActive && <span className={getCreditColor(player.creditScore)}>信用 {getCreditLabel(player.creditScore)}({Math.floor(player.creditScore)})</span>}
                             {vipActive && (
                               <span className={player.profit >= 0 ? 'text-emerald-400' : 'text-red-400'}>
-                                通算 {player.profit >= 0 ? '+' : ''}{player.profit.toLocaleString()}G
+                                通算 {player.profit >= 0 ? '+' : ''}{player.profit.toLocaleString()}Y
                               </span>
                             )}
                             {vipActive && player.createdAt > 0 && <span className="text-gray-600">{new Date(player.createdAt).toLocaleDateString('ja-JP')}〜</span>}
                           </div>
                         </div>
                       </div>
-                      <span className="font-mono text-lg md:text-xl font-black text-amber-300 shrink-0">{player.total.toLocaleString()} G</span>
+                      <span className="font-mono text-lg md:text-xl font-black text-amber-300 shrink-0">{player.total.toLocaleString()} Y</span>
                     </button>
                   );
                 })}
@@ -1524,7 +1765,7 @@ export default function App() {
       </div>
 
       <footer className="py-6 border-t border-white/5 text-center text-[11px] text-gray-600 tracking-widest">
-        © 2026 YUTAPON CASINO &amp; TURF — 20歳未満の入場はご遠慮ください（架空通貨G）
+        © 2026 YUTAPON CASINO &amp; TURF — 20歳未満の入場はご遠慮ください（架空通貨Y）
       </footer>
     </div>
   );
@@ -1711,8 +1952,8 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
       setHistory(prev => [{ value: winValue, net: payout - total }, ...prev].slice(0, 12));
 
       if (payout > 0) {
-        showToast(`🎡 ${winValue} エリア当選！ +${payout.toLocaleString()} G`, 'success');
-        if (payout - total >= 50000) emitNews(`🎡 ${playerName} がルーレットで ×${winValue} を的中！ +${(payout - total).toLocaleString()} G！`, 'jackpot');
+        showToast(`🎡 ${winValue} エリア当選！ +${payout.toLocaleString()} Y`, 'success');
+        if (payout - total >= 50000) emitNews(`🎡 ${playerName} がルーレットで ×${winValue} を的中！ +${(payout - total).toLocaleString()} Y！`, 'jackpot');
       } else {
         showToast(`😢 ${winValue} エリア…ハズレ`, 'error');
       }
@@ -1736,7 +1977,7 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
     <div className="p-4 md:p-6 max-w-6xl mx-auto">
       <div className="w-full flex justify-between items-center mb-5">
         <button onClick={() => { autoRef.current = false; onBack(); }} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
-        <div className="bg-black/60 px-5 py-2 rounded-full border border-amber-500/30 font-mono text-xl text-amber-300 font-bold">{balance.toLocaleString()} G</div>
+        <div className="bg-black/60 px-5 py-2 rounded-full border border-amber-500/30 font-mono text-xl text-amber-300 font-bold">{balance.toLocaleString()} Y</div>
       </div>
 
       <div className="flex flex-col xl:flex-row gap-5">
@@ -1763,15 +2004,15 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
                   </div>
                   {winAmount > 0 ? (
                     <div className="text-right">
-                      <div className="text-3xl font-black text-emerald-400">+{winAmount.toLocaleString()} G</div>
+                      <div className="text-3xl font-black text-emerald-400">+{winAmount.toLocaleString()} Y</div>
                       <div className={`text-sm font-bold ${winAmount - stakedTotal >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                        収支 {winAmount - stakedTotal >= 0 ? '+' : ''}{(winAmount - stakedTotal).toLocaleString()} G
+                        収支 {winAmount - stakedTotal >= 0 ? '+' : ''}{(winAmount - stakedTotal).toLocaleString()} Y
                       </div>
                     </div>
                   ) : (
                     <div>
                       <div className="text-2xl font-black text-red-400">ハズレ</div>
-                      <div className="text-red-400/80 text-sm">-{stakedTotal.toLocaleString()} G</div>
+                      <div className="text-red-400/80 text-sm">-{stakedTotal.toLocaleString()} Y</div>
                     </div>
                   )}
                 </div>
@@ -1790,7 +2031,7 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
                   {history.map((h, i) => {
                     const z = ROULETTE_ZONES.find(zz => zz.value === h.value);
                     return (
-                      <div key={i} title={`${h.net >= 0 ? '+' : ''}${h.net.toLocaleString()} G`}
+                      <div key={i} title={`${h.net >= 0 ? '+' : ''}${h.net.toLocaleString()} Y`}
                         className={`w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-black border-2 ${z.borderClass} ${h.net >= 0 ? 'ring-2 ring-emerald-400/40' : ''}`}
                         style={{ backgroundColor: z.color }}>{h.value}</div>
                     );
@@ -1816,7 +2057,7 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
                       <div className="text-gray-500 text-[11px]">当選確率 {Math.round((zone.weight / TOTAL_SLOTS) * 1000) / 10}%</div>
                     </div>
                     {bets[zone.value] > 0 && (
-                      <div className={`text-[11px] font-bold ${zone.textClass}`}>→ {(bets[zone.value] * zone.value).toLocaleString()} G</div>
+                      <div className={`text-[11px] font-bold ${zone.textClass}`}>→ {(bets[zone.value] * zone.value).toLocaleString()} Y</div>
                     )}
                   </div>
                   <input type="number" min="0" step="100" value={bets[zone.value] || ''} placeholder="0"
@@ -1837,7 +2078,7 @@ function RouletteView({ balance, updateBalance, onBack, showToast, playerName, e
             <div className="border-t border-white/10 pt-4 space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-gray-400 text-sm font-bold">合計ベット</span>
-                <span className="font-mono text-xl font-black text-amber-300">{totalBet.toLocaleString()} G</span>
+                <span className="font-mono text-xl font-black text-amber-300">{totalBet.toLocaleString()} Y</span>
               </div>
               <div className="flex gap-2">
                 <button onClick={clearBets} disabled={phase !== 'BETTING'} className="bg-white/5 hover:bg-white/15 text-gray-300 font-bold py-3 px-4 rounded-xl transition disabled:opacity-40 text-sm">クリア</button>
@@ -1939,7 +2180,7 @@ function JankenView({ balance, updateBalance, onBack, showToast, playerName, emi
     } catch (e) { /* noop */ }
 
     const opp = host ? data.guest : data.host;
-    if (result === 'WIN') emitNews(`✊ ${playerName} が ${opp} とのじゃんけんに勝利！ +${bet.toLocaleString()} G`, 'janken');
+    if (result === 'WIN') emitNews(`✊ ${playerName} が ${opp} とのじゃんけんに勝利！ +${bet.toLocaleString()} Y`, 'janken');
     if (!mountedRef.current) return;
     setGameResult({ result, mine, theirs, mineLabel: mineData?.label || '？', theirsLabel: theirsData?.label || '？', bet });
     setPhase('RESULT'); phaseRef.current = 'RESULT';
@@ -2012,7 +2253,7 @@ function JankenView({ balance, updateBalance, onBack, showToast, playerName, emi
 
   const createRoom = async () => {
     const bet = parseInt(createBet, 10);
-    if (isNaN(bet) || bet < 10) { showToast('賭け金は10G以上にしてください。', 'error'); return; }
+    if (isNaN(bet) || bet < 10) { showToast('賭け金は10Y以上にしてください。', 'error'); return; }
     if (bet > balance) { showToast('所持金が足りません。', 'error'); return; }
     try {
       const ref = doc(roomsRef);
@@ -2031,7 +2272,7 @@ function JankenView({ balance, updateBalance, onBack, showToast, playerName, emi
   const joinRoom = async (room) => {
     if (room.guest) { showToast('このルームは満員です。', 'error'); return; }
     if (room.host === playerName) { showToast('自分のルームには参加できません。', 'error'); return; }
-    if ((room.bet || 0) > balance) { showToast(`賭け金 ${(room.bet || 0).toLocaleString()} G が足りません。`, 'error'); return; }
+    if ((room.bet || 0) > balance) { showToast(`賭け金 ${(room.bet || 0).toLocaleString()} Y が足りません。`, 'error'); return; }
     try {
       await updateDoc(roomDoc(room.id), { guest: playerName, status: 'PLAYING' });
       resolvedRef.current = false;
@@ -2109,7 +2350,7 @@ function JankenView({ balance, updateBalance, onBack, showToast, playerName, emi
                 className="w-full bg-black/50 text-white font-mono text-xl p-3 rounded-xl border border-white/10 focus:outline-none focus:border-amber-400" />
             </div>
             <div className="text-gray-500 text-sm">
-              <div>所持金: <span className="text-amber-300 font-bold">{balance.toLocaleString()} G</span></div>
+              <div>所持金: <span className="text-amber-300 font-bold">{balance.toLocaleString()} Y</span></div>
               <div className="text-[11px]">勝てば +{(parseInt(createBet, 10) || 0).toLocaleString()} / 負ければ -{(parseInt(createBet, 10) || 0).toLocaleString()}</div>
             </div>
           </div>
@@ -2128,7 +2369,7 @@ function JankenView({ balance, updateBalance, onBack, showToast, playerName, emi
                 <div key={room.id} className="flex items-center justify-between bg-black/40 p-4 rounded-xl border border-white/10">
                   <div><span className="text-white font-bold">{room.host}</span><span className="text-gray-500 text-xs ml-2">のルーム</span></div>
                   <div className="flex items-center gap-4">
-                    <span className="text-amber-300 font-mono font-black">{(room.bet || 0).toLocaleString()} G</span>
+                    <span className="text-amber-300 font-mono font-black">{(room.bet || 0).toLocaleString()} Y</span>
                     <button onClick={() => joinRoom(room)} className="bg-pink-600 hover:bg-pink-500 text-white text-sm font-black px-4 py-2 rounded-lg transition active:scale-95">参加する</button>
                   </div>
                 </div>
@@ -2145,8 +2386,8 @@ function JankenView({ balance, updateBalance, onBack, showToast, playerName, emi
         <button onClick={leaveRoom} className="flex items-center gap-2 text-gray-400 hover:text-white transition text-sm">
           <ArrowLeft size={18} /> {isHost ? 'ルームを解散' : 'ルームを退出'}
         </button>
-        <div className="text-sm text-gray-400">賭け金: <span className="text-amber-300 font-black">{(currentRoom?.bet || 0).toLocaleString()} G</span></div>
-        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{balance.toLocaleString()} G</div>
+        <div className="text-sm text-gray-400">賭け金: <span className="text-amber-300 font-black">{(currentRoom?.bet || 0).toLocaleString()} Y</span></div>
+        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{balance.toLocaleString()} Y</div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -2222,7 +2463,7 @@ function JankenView({ balance, updateBalance, onBack, showToast, playerName, emi
                 </div>
               </div>
               <div className={`text-2xl font-black mb-6 ${gameResult.result === 'WIN' ? 'text-emerald-400' : gameResult.result === 'LOSE' ? 'text-red-400' : 'text-gray-400'}`}>
-                {gameResult.result === 'DRAW' ? '賭け金の移動なし' : `${gameResult.result === 'WIN' ? '+' : '-'}${gameResult.bet.toLocaleString()} G`}
+                {gameResult.result === 'DRAW' ? '賭け金の移動なし' : `${gameResult.result === 'WIN' ? '+' : '-'}${gameResult.bet.toLocaleString()} Y`}
               </div>
               <div className="flex gap-3">
                 <GoldButton onClick={rematch} className="flex-1 py-4">もう一度！</GoldButton>
@@ -2327,7 +2568,7 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
     const amount = parseInt(amountInput, 10);
     if (!target) { showToast('投資先のプレイヤー名を入力してください。', 'error'); return; }
     if (target === playerName) { showToast('自分自身には投資できません。', 'error'); return; }
-    if (isNaN(amount) || amount < INVEST_MIN_AMOUNT) { showToast(`投資額は ${INVEST_MIN_AMOUNT.toLocaleString()}G 以上にしてください。`, 'error'); return; }
+    if (isNaN(amount) || amount < INVEST_MIN_AMOUNT) { showToast(`投資額は ${INVEST_MIN_AMOUNT.toLocaleString()}Y 以上にしてください。`, 'error'); return; }
     if (balance < amount) { showToast('所持金が足りません！', 'error'); return; }
     setBusy(true);
     try {
@@ -2346,8 +2587,8 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
         investor: playerName, target, amount, fee, principal,
         baseNetWorth, status: 'ACTIVE', createdAt: Date.now(),
       });
-      showToast(`📈 ${target} に ${amount.toLocaleString()}G 投資（${fee.toLocaleString()}G 還元／元本 ${principal.toLocaleString()}G）`, 'success');
-      if (amount >= 50000) emitNews(`📈 ${playerName} が ${target} に ${amount.toLocaleString()}G の大口投資！`, 'invest');
+      showToast(`📈 ${target} に ${amount.toLocaleString()}Y 投資（${fee.toLocaleString()}Y 還元／元本 ${principal.toLocaleString()}Y）`, 'success');
+      if (amount >= 50000) emitNews(`📈 ${playerName} が ${target} に ${amount.toLocaleString()}Y の大口投資！`, 'invest');
       setTargetInput('');
     } catch (e) { showToast('投資エラー', 'error'); }
     setBusy(false);
@@ -2364,10 +2605,10 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
       if (value > 0) await updateBalance(value);
       const profit = value - inv.amount;
       if (profit >= 0) {
-        showToast(`✅ ${inv.target} 株を売却 +${value.toLocaleString()}G（損益 +${profit.toLocaleString()}G）`, 'success');
-        if (profit >= 20000) emitNews(`📈 ${playerName} が ${inv.target} 株で +${profit.toLocaleString()}G の利益確定！`, 'invest');
+        showToast(`✅ ${inv.target} 株を売却 +${value.toLocaleString()}Y（損益 +${profit.toLocaleString()}Y）`, 'success');
+        if (profit >= 20000) emitNews(`📈 ${playerName} が ${inv.target} 株で +${profit.toLocaleString()}Y の利益確定！`, 'invest');
       } else {
-        showToast(`📉 ${inv.target} 株を売却 ${value.toLocaleString()}G（損益 ${profit.toLocaleString()}G）`, 'warning');
+        showToast(`📉 ${inv.target} 株を売却 ${value.toLocaleString()}Y（損益 ${profit.toLocaleString()}Y）`, 'warning');
       }
     } catch (e) { showToast('売却エラー', 'error'); }
     setBusy(false);
@@ -2394,7 +2635,7 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
           <p className="text-gray-200 font-bold mb-1">📖 仕組み</p>
           <p>・投資額の<span className="text-cyan-300 font-bold">{Math.round(INVEST_FEE_RATE * 100)}%</span>は投資先へ即時還元。</p>
           <p>・残り<span className="text-cyan-300 font-bold">{Math.round((1 - INVEST_FEE_RATE) * 100)}%</span>が元本になり、投資先の純資産の変動率の<span className="text-cyan-300 font-bold">1/10</span>だけ連動。</p>
-          <p>・例）10,000G投資 → 1,000G還元／元本9,000G。投資先が+10%成長で元本+1%（9,090G）。</p>
+          <p>・例）10,000Y投資 → 1,000Y還元／元本9,000Y。投資先が+10%成長で元本+1%（9,090Y）。</p>
           <p>・好きなタイミングで売却するとその時点の評価額を受け取ります（下落時は元本も減少）。</p>
         </div>
 
@@ -2409,7 +2650,7 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
           <div>
             <div className="bg-black/40 p-4 rounded-xl border border-white/10 mb-6 flex justify-between">
               <span className="text-sm text-gray-400 font-bold">所持金</span>
-              <span className="text-xl font-mono font-black text-amber-300">{balance.toLocaleString()} G</span>
+              <span className="text-xl font-mono font-black text-amber-300">{balance.toLocaleString()} Y</span>
             </div>
             <div className="space-y-4 mb-4">
               <div>
@@ -2427,8 +2668,8 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
               </div>
             </div>
             <div className="bg-black/40 p-4 rounded-xl border border-white/10 mb-6 grid grid-cols-2 gap-3 text-sm">
-              <div><span className="text-gray-500 text-[11px] block">投資先への還元</span><span className="text-cyan-300 font-mono font-bold">{previewFee.toLocaleString()} G</span></div>
-              <div><span className="text-gray-500 text-[11px] block">運用元本</span><span className="text-emerald-400 font-mono font-bold">{(previewAmount - previewFee).toLocaleString()} G</span></div>
+              <div><span className="text-gray-500 text-[11px] block">投資先への還元</span><span className="text-cyan-300 font-mono font-bold">{previewFee.toLocaleString()} Y</span></div>
+              <div><span className="text-gray-500 text-[11px] block">運用元本</span><span className="text-emerald-400 font-mono font-bold">{(previewAmount - previewFee).toLocaleString()} Y</span></div>
             </div>
             <button onClick={invest} disabled={busy} className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-4 rounded-xl font-black transition active:scale-95 text-lg flex items-center justify-center gap-2 disabled:opacity-50">
               <TrendingUp size={20} /> 投資を実行する
@@ -2454,12 +2695,12 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
                     <span className="bg-cyan-500/10 text-cyan-300 text-[11px] font-bold px-2 py-1 rounded-full">保有中</span>
                   </div>
                   <div className="grid grid-cols-3 gap-2 text-[12px] mb-3">
-                    <div><span className="text-gray-500 block">元本</span><span className="text-white font-mono font-bold">{inv.principal.toLocaleString()}G</span></div>
+                    <div><span className="text-gray-500 block">元本</span><span className="text-white font-mono font-bold">{inv.principal.toLocaleString()}Y</span></div>
                     <div><span className="text-gray-500 block">対象の成長</span><span className={`font-mono font-bold ${growth >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{growth >= 0 ? '+' : ''}{growth.toFixed(1)}%</span></div>
-                    <div><span className="text-gray-500 block">評価額</span><span className="text-amber-300 font-mono font-bold">{value.toLocaleString()}G</span></div>
+                    <div><span className="text-gray-500 block">評価額</span><span className="text-amber-300 font-mono font-bold">{value.toLocaleString()}Y</span></div>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className={`text-sm font-bold ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{profit >= 0 ? '+' : ''}{profit.toLocaleString()}G</span>
+                    <span className={`text-sm font-bold ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{profit >= 0 ? '+' : ''}{profit.toLocaleString()}Y</span>
                     <GoldButton onClick={() => sell(inv)} disabled={busy} className="px-5 py-2 text-sm">売却する</GoldButton>
                   </div>
                 </div>
@@ -2474,7 +2715,7 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
                     return (
                       <div key={inv.id} className="flex justify-between items-center text-[12px] p-3 rounded-lg bg-black/30 border border-white/10">
                         <div><span className="text-white font-bold">{inv.target}</span><span className="text-gray-600 ml-2">{fmt(inv.soldAt)}</span></div>
-                        <span className={`font-mono font-black ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{profit >= 0 ? '+' : ''}{profit.toLocaleString()}G</span>
+                        <span className={`font-mono font-black ${profit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{profit >= 0 ? '+' : ''}{profit.toLocaleString()}Y</span>
                       </div>
                     );
                   })}
@@ -2495,7 +2736,7 @@ function InvestmentView({ balance, updateBalance, onBack, showToast, playerName,
                     <span className="text-gray-600 text-[11px] ml-2">{fmt(inv.createdAt)}</span>
                     <span className={`text-[11px] ml-2 ${inv.status === 'ACTIVE' ? 'text-cyan-300' : 'text-gray-500'}`}>{inv.status === 'ACTIVE' ? '保有中' : '売却済'}</span>
                   </div>
-                  <span className="text-emerald-400 font-mono font-bold">+{(inv.fee || 0).toLocaleString()}G 受取済</span>
+                  <span className="text-emerald-400 font-mono font-bold">+{(inv.fee || 0).toLocaleString()}Y 受取済</span>
                 </div>
               ))}
           </div>

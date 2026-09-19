@@ -85,7 +85,7 @@ export default function MiningView({ balance, updateBalance, onBack, showToast, 
   const startGame = async (idx) => {
     const L = MINE_LEVELS[idx];
     if (busyRef.current) return;
-    if (balance < L.cost) { showToast(`参加費 ${L.cost.toLocaleString()} G が足りません！`, 'error'); return; }
+    if (balance < L.cost) { showToast(`参加費 ${L.cost.toLocaleString()} Y が足りません！`, 'error'); return; }
     busyRef.current = true;
     try { await updateBalance(-L.cost); } catch (e) { busyRef.current = false; return; }
     busyRef.current = false;
@@ -95,7 +95,7 @@ export default function MiningView({ balance, updateBalance, onBack, showToast, 
     setFlagged(Array(L.rows * L.cols).fill(false));
     setResult(null); setExploded(null); setSafeCount(0); setElapsed(0);
     setPhase('PLAYING');
-    showToast(`${L.label} 開始！参加費 -${L.cost.toLocaleString()} G`, 'warning');
+    showToast(`${L.label} 開始！参加費 -${L.cost.toLocaleString()} Y`, 'warning');
   };
 
   const handleCellClick = async (row, col) => {
@@ -127,8 +127,8 @@ export default function MiningView({ balance, updateBalance, onBack, showToast, 
       clearInterval(timerRef.current);
       setResult('WIN'); setPhase('RESULT');
       try { await updateBalance(lvl.reward); } catch (e) { /* noop */ }
-      showToast(`⛏️ 採掘成功！+${lvl.reward.toLocaleString()} G`, 'success');
-      if (lvl.label === '地獄坑道') emitNews(`⛏️ ${playerName} が${lvl.label}の採掘に成功！${lvl.reward.toLocaleString()} G 獲得！`, 'mining');
+      showToast(`⛏️ 採掘成功！+${lvl.reward.toLocaleString()} Y`, 'success');
+      if (lvl.label === '地獄坑道') emitNews(`⛏️ ${playerName} が${lvl.label}の採掘に成功！${lvl.reward.toLocaleString()} Y 獲得！`, 'mining');
     }
   };
 
@@ -152,7 +152,7 @@ export default function MiningView({ balance, updateBalance, onBack, showToast, 
             <span className={`font-bold ${lvl.color}`}>{lvl.label}</span>
             <span className="text-gray-400 font-mono">⏱ {elapsed}秒</span>
             <span className="text-amber-300 font-mono font-bold">{safeCount}/{totalSafe}</span>
-            <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-amber-300 font-bold">{balance.toLocaleString()} G</div>
+            <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-amber-300 font-bold">{balance.toLocaleString()} Y</div>
           </div>
         )}
       </div>
@@ -175,8 +175,8 @@ export default function MiningView({ balance, updateBalance, onBack, showToast, 
                   </div>
                 </div>
                 <div className="flex justify-between items-center">
-                  <div><div className="text-gray-400 text-[11px]">参加費</div><div className="text-red-400 font-black text-lg">-{lv.cost.toLocaleString()} G</div></div>
-                  <div className="text-right"><div className="text-gray-400 text-[11px]">クリア報酬</div><div className={`font-black text-2xl ${lv.color}`}>+{lv.reward.toLocaleString()} G</div></div>
+                  <div><div className="text-gray-400 text-[11px]">参加費</div><div className="text-red-400 font-black text-lg">-{lv.cost.toLocaleString()} Y</div></div>
+                  <div className="text-right"><div className="text-gray-400 text-[11px]">クリア報酬</div><div className={`font-black text-2xl ${lv.color}`}>+{lv.reward.toLocaleString()} Y</div></div>
                 </div>
                 <div className="text-[11px] text-gray-600 mt-2">地雷密度 {Math.round((lv.mines / (lv.rows * lv.cols)) * 100)}%</div>
               </button>
@@ -221,8 +221,8 @@ export default function MiningView({ balance, updateBalance, onBack, showToast, 
             <h3 className={`text-3xl font-black mb-2 ${result === 'WIN' ? 'text-amber-300' : 'text-red-400'}`}>{result === 'WIN' ? '採掘成功！' : '爆発！！'}</h3>
             <p className="text-gray-400 mb-4">{lvl.label} / {elapsed}秒</p>
             {result === 'WIN'
-              ? <div className="text-4xl font-black text-emerald-400">+{lvl.reward.toLocaleString()} G</div>
-              : <div className="text-2xl font-black text-red-400">参加費 {lvl.cost.toLocaleString()} G 没収</div>}
+              ? <div className="text-4xl font-black text-emerald-400">+{lvl.reward.toLocaleString()} Y</div>
+              : <div className="text-2xl font-black text-red-400">参加費 {lvl.cost.toLocaleString()} Y 没収</div>}
           </Panel>
 
           {board.length > 0 && (

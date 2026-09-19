@@ -194,7 +194,7 @@ export default function SlotMachine({ balance, updateBalance, onBack, showToast,
       lossStreakRef.current = 0;
       playSfx(evalRes.totalMult >= 200 ? 'big' : 'win', soundRef.current);
       try { await updateBalance(win); } catch (e) { /* noop */ }
-      if (win >= 100000) emitNews(`🎰 ${playerName} がスロットで大当たり！ ${win.toLocaleString()} G 獲得！！`, 'jackpot');
+      if (win >= 100000) emitNews(`🎰 ${playerName} がスロットで大当たり！ ${win.toLocaleString()} Y 獲得！！`, 'jackpot');
       // 払い出しメーターのカウントアップ
       const steps = 24;
       let n = 0;
@@ -209,7 +209,7 @@ export default function SlotMachine({ balance, updateBalance, onBack, showToast,
       lossStreakRef.current += totalBet;
       playSfx('lose', soundRef.current);
       if (lossStreakRef.current >= 100000) {
-        emitNews(`💸 ${playerName} がスロットで ${lossStreakRef.current.toLocaleString()} G の大負け...`, 'loss');
+        emitNews(`💸 ${playerName} がスロットで ${lossStreakRef.current.toLocaleString()} Y の大負け...`, 'loss');
         lossStreakRef.current = 0;
       }
     }
@@ -350,7 +350,7 @@ export default function SlotMachine({ balance, updateBalance, onBack, showToast,
           <div className="text-center"><div className="text-[10px] text-gray-500 font-bold">SPINS</div><div className="font-mono text-amber-300 font-bold">{spinCount}</div></div>
           <div className="text-center"><div className="text-[10px] text-gray-500 font-bold">NET</div>
             <div className={`font-mono font-bold ${netWin >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{netWin >= 0 ? '+' : ''}{netWin.toLocaleString()}</div></div>
-          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg md:text-xl text-amber-300 font-bold">{balance.toLocaleString()} G</div>
+          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg md:text-xl text-amber-300 font-bold">{balance.toLocaleString()} Y</div>
         </div>
       </div>
 
@@ -460,7 +460,7 @@ export default function SlotMachine({ balance, updateBalance, onBack, showToast,
                 <div className="absolute inset-x-0 -top-3 flex justify-center pointer-events-none z-30">
                   <div className={`px-5 py-1 rounded-full text-sm md:text-lg font-black shadow-lg ${result.win > 0 ? 'bg-amber-400 text-black' : 'bg-black/85 text-gray-400 border border-white/10'}`}>
                     {result.win > 0
-                      ? <>WIN +{winMeter.toLocaleString()} G <span className="text-[11px] font-bold opacity-70">×{result.totalMult}</span></>
+                      ? <>WIN +{winMeter.toLocaleString()} Y <span className="text-[11px] font-bold opacity-70">×{result.totalMult}</span></>
                       : 'LOSE'}
                   </div>
                 </div>
@@ -529,7 +529,7 @@ export default function SlotMachine({ balance, updateBalance, onBack, showToast,
                 </button>
               ))}
               {vip && <VipBadge size="xs" />}
-              <span className="text-[11px] text-gray-400 font-bold ml-1">× 5ライン = <span className="text-amber-300">{totalBet.toLocaleString()} G</span></span>
+              <span className="text-[11px] text-gray-400 font-bold ml-1">× 5ライン = <span className="text-amber-300">{totalBet.toLocaleString()} Y</span></span>
             </div>
             <div className="flex gap-2 items-center">
               <button onClick={toggleAuto}

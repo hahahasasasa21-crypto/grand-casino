@@ -114,7 +114,7 @@ export default function Blackjack({ balance, updateBalance, onBack, showToast, p
   const deal = async () => {
     if (phase !== 'BET') return;
     const amount = Math.floor(Number(bet) || 0);
-    if (amount < 500) { showToast('500G以上を賭けてください。', 'error'); return; }
+    if (amount < 500) { showToast('500Y以上を賭けてください。', 'error'); return; }
     if (balance < amount) { showToast('残高が足りません。', 'error'); return; }
     try { await updateBalance(-amount); } catch (e) { return; }
     if (!mountedRef.current) return;
@@ -310,9 +310,9 @@ export default function Blackjack({ balance, updateBalance, onBack, showToast, p
     setSessionNet(v => v + net);
     setResults({ rows, insGain, payout, staked, net, dealerBJ });
     setPhase('RESULT');
-    setMessage(net > 0 ? `🎉 +${fmt(net)} G の勝ち！` : net === 0 ? 'プッシュ（引き分け）' : `😢 ${fmt(net)} G`);
+    setMessage(net > 0 ? `🎉 +${fmt(net)} Y の勝ち！` : net === 0 ? 'プッシュ（引き分け）' : `😢 ${fmt(net)} Y`);
     playSfx(net > 0 ? (net >= staked * 2 ? 'big' : 'win') : net === 0 ? 'click' : 'lose', soundRef.current);
-    if (net >= 100000) emitNews(`🃏 ${playerName} がVIPルームのブラックジャックで +${fmt(net)} G！`, 'jackpot');
+    if (net >= 100000) emitNews(`🃏 ${playerName} がVIPルームのブラックジャックで +${fmt(net)} Y！`, 'jackpot');
   };
 
   const newRound = () => {
@@ -356,7 +356,7 @@ export default function Blackjack({ balance, updateBalance, onBack, showToast, p
             <div className="text-[9px] text-gray-500 font-bold">収支</div>
             <div className={`font-mono text-xs font-bold ${sessionNet >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{sessionNet >= 0 ? '+' : ''}{fmt(sessionNet)}</div>
           </div>
-          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
         </div>
       </div>
 
@@ -416,7 +416,7 @@ export default function Blackjack({ balance, updateBalance, onBack, showToast, p
 
         {insurance > 0 && (
           <div className="flex justify-center mt-3">
-            <span className="text-[11px] font-black px-2.5 py-1 rounded-full bg-sky-600/70 text-white">インシュランス {fmt(insurance)} G{results ? (results.insGain ? ` → +${fmt(results.insGain)}` : ' → 没収') : ''}</span>
+            <span className="text-[11px] font-black px-2.5 py-1 rounded-full bg-sky-600/70 text-white">インシュランス {fmt(insurance)} Y{results ? (results.insGain ? ` → +${fmt(results.insGain)}` : ' → 没収') : ''}</span>
           </div>
         )}
       </div>
@@ -448,7 +448,7 @@ export default function Blackjack({ balance, updateBalance, onBack, showToast, p
 
         {phase === 'INSURANCE' && (
           <div className="flex flex-wrap items-center gap-3 justify-center">
-            <span className="text-sm font-bold text-white">インシュランス（{fmt(Math.floor(hands[0]?.bet / 2))} G）を賭けますか？</span>
+            <span className="text-sm font-bold text-white">インシュランス（{fmt(Math.floor(hands[0]?.bet / 2))} Y）を賭けますか？</span>
             <GoldButton onClick={() => takeInsurance(true)} className="py-2.5 px-6">賭ける</GoldButton>
             <button onClick={() => takeInsurance(false)} className="py-2.5 px-6 rounded-xl font-black bg-white/10 hover:bg-white/20 text-white">いらない</button>
           </div>
@@ -478,7 +478,7 @@ export default function Blackjack({ balance, updateBalance, onBack, showToast, p
             <div className="flex-1 min-w-[160px]">
               <div className="text-[10px] text-gray-400 font-bold">このラウンドの収支</div>
               <div className={`font-mono text-2xl font-black ${results.net >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {results.net >= 0 ? '+' : ''}{fmt(results.net)} G
+                {results.net >= 0 ? '+' : ''}{fmt(results.net)} Y
               </div>
             </div>
             <GoldButton onClick={newRound} className="py-3.5 px-10 text-lg">次のラウンド</GoldButton>

@@ -648,7 +648,7 @@ function LoanGame({ diff, onFinish, shell, ctx }) {
             </div>
             <div className="col-span-2 p-2 rounded-lg bg-amber-400/10 border border-amber-400/30">
               <div className="text-[9px] text-amber-200/70 font-bold">希望額（用途：{a.purpose}）</div>
-              <div className="font-mono font-black text-amber-300 text-lg">{a.want.toLocaleString()} G</div>
+              <div className="font-mono font-black text-amber-300 text-lg">{a.want.toLocaleString()} Y</div>
               <div className="text-[10px] text-gray-500">貸したあとの残高 {after.toLocaleString()} / 上限 {limit.toLocaleString()}</div>
             </div>
           </div>
@@ -735,9 +735,9 @@ function FraudGame({ diff, onFinish, shell, ctx }) {
               className={`w-full flex items-center gap-2 p-2.5 rounded-xl border text-left transition disabled:cursor-default
                 ${fb && r.bad ? 'border-emerald-400 bg-emerald-500/15' : 'border-white/10 bg-black/40 hover:border-amber-400/50'}`}>
               <span className="text-[11px] font-bold text-gray-300 w-28 shrink-0 truncate">{r.game}</span>
-              <span className="text-[11px] font-mono text-gray-400 shrink-0">{r.bet.toLocaleString()}G</span>
+              <span className="text-[11px] font-mono text-gray-400 shrink-0">{r.bet.toLocaleString()}Y</span>
               <span className="text-[11px] font-mono text-sky-300 shrink-0">×{r.mult}</span>
-              <span className="ml-auto text-[13px] font-mono font-black text-amber-300 shrink-0">{r.payout.toLocaleString()}G</span>
+              <span className="ml-auto text-[13px] font-mono font-black text-amber-300 shrink-0">{r.payout.toLocaleString()}Y</span>
             </button>
           ))}
         </div>

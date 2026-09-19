@@ -226,7 +226,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
 
   /* ---------- 部屋の作成・参加 ---------- */
   const createRoom = async () => {
-    if (balance < fee) { showToast(`参加費 ${fmt(fee)} G が必要です。`, 'error'); return; }
+    if (balance < fee) { showToast(`参加費 ${fmt(fee)} Y が必要です。`, 'error'); return; }
     setBusy(true);
     try {
       await updateBalance(-fee);
@@ -248,7 +248,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
   const joinRoom = async (r) => {
     if ((r.players || []).some(p => p.name === playerName)) { setRoomId(r.id); return; }
     if (r.status !== 'WAITING') { showToast('この部屋はもう始まっています。', 'error'); return; }
-    if (balance < r.fee) { showToast(`参加費 ${fmt(r.fee)} G が必要です。`, 'error'); return; }
+    if (balance < r.fee) { showToast(`参加費 ${fmt(r.fee)} Y が必要です。`, 'error'); return; }
     setBusy(true);
     try {
       await updateBalance(-r.fee);
@@ -288,7 +288,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
           tx.update(roomDoc(room.id), { players: ps, pot: Math.max(0, (d.pot || 0) - d.fee), updatedAt: Date.now() });
         });
         await updateBalance(room.fee).catch(() => { });
-        showToast(`参加費 ${fmt(room.fee)} G を返金しました。`, 'info');
+        showToast(`参加費 ${fmt(room.fee)} Y を返金しました。`, 'info');
       }
       await deleteDoc(doc(presenceRef(room.id), encodeURIComponent(playerName))).catch(() => { });
       setRoomId(null); setRoom(null); setCard(null); setWheel(null);
@@ -409,10 +409,10 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
         });
         if (myResult.prize > 0) {
           await updateBalance(myResult.prize);
-          showToast(`🏆 ${myResult.rank}位！ 賞金 ${fmt(myResult.prize)} G を受け取りました`, 'success');
+          showToast(`🏆 ${myResult.rank}位！ 賞金 ${fmt(myResult.prize)} Y を受け取りました`, 'success');
           playSfx('win');
           if (myResult.rank === 1 && myResult.prize >= 50000) {
-            emitNews(`🎲 ${playerName} が人生ゲームで優勝！ ${fmt(myResult.prize)} G 獲得！`, 'jackpot');
+            emitNews(`🎲 ${playerName} が人生ゲームで優勝！ ${fmt(myResult.prize)} Y 獲得！`, 'jackpot');
           }
         } else {
           showToast(`${myResult.rank}位でした…`, 'warning');
@@ -427,7 +427,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
       <div className="p-4 md:p-6 max-w-4xl mx-auto">
         <div className="w-full flex justify-between items-center mb-4">
           <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
-          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
         </div>
 
         <div className="relative rounded-3xl overflow-hidden border border-amber-500/25 mb-4">
@@ -457,13 +457,13 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
                   <div className="flex-1 min-w-0">
                     <div className="font-black text-white flex items-center gap-2 flex-wrap">
                       {r.createdBy} の部屋
-                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-400/15 text-amber-200 border border-amber-400/30">参加費 {fmt(r.fee)}G</span>
+                      <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-400/15 text-amber-200 border border-amber-400/30">参加費 {fmt(r.fee)}Y</span>
                       <span className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${r.status === 'WAITING' ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30' : 'bg-white/10 text-gray-400 border-white/15'}`}>
                         {r.status === 'WAITING' ? '募集中' : r.status === 'PLAYING' ? 'ゲーム中' : '終了'}
                       </span>
                     </div>
                     <div className="text-[11px] text-gray-500">
-                      {(r.players || []).length} / {r.maxSeats} 人 ・ 賞金プール {fmt(r.pot)} G
+                      {(r.players || []).length} / {r.maxSeats} 人 ・ 賞金プール {fmt(r.pot)} Y
                       {(r.players || []).length > 0 && <> ・ {(r.players || []).map(p => p.name).join('、')}</>}
                     </div>
                   </div>
@@ -502,7 +502,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
             ))}
           </div>
           <GoldButton onClick={createRoom} disabled={busy || balance < fee} className="w-full py-3.5 text-lg">
-            参加費 {fmt(fee)} G で部屋を立てる
+            参加費 {fmt(fee)} Y で部屋を立てる
           </GoldButton>
         </Panel>
       </div>
@@ -525,13 +525,13 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
         <div className="flex items-center gap-2">
           <div className="text-center px-2">
             <div className="text-[9px] text-gray-500 font-bold">賞金プール</div>
-            <div className="font-mono text-xs text-amber-300 font-bold">{fmt(room.pot)} G</div>
+            <div className="font-mono text-xs text-amber-300 font-bold">{fmt(room.pot)} Y</div>
           </div>
           <div className="text-center px-2">
             <div className="text-[9px] text-gray-500 font-bold">参加</div>
             <div className="font-mono text-xs text-white font-bold">{players.length}/{room.maxSeats}</div>
           </div>
-          <div className="bg-black/60 px-3 py-1.5 rounded-full border border-amber-500/30 font-mono text-base text-amber-300 font-bold">{fmt(balance)} G</div>
+          <div className="bg-black/60 px-3 py-1.5 rounded-full border border-amber-500/30 font-mono text-base text-amber-300 font-bold">{fmt(balance)} Y</div>
         </div>
       </div>
 
@@ -580,7 +580,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
                 <div className="flex items-center gap-2">
                   <Trophy className="text-amber-300" size={20} />
                   <h3 className="text-xl font-black text-white">最終結果</h3>
-                  {room.stockValue > 0 && <span className="text-[11px] text-gray-500">株の評価額 {fmt(room.stockValue)} G/口</span>}
+                  {room.stockValue > 0 && <span className="text-[11px] text-gray-500">株の評価額 {fmt(room.stockValue)} Y/口</span>}
                 </div>
                 {!room.results ? (
                   <div className="flex items-center justify-center gap-2 py-4 text-gray-400"><RefreshCw size={16} className="animate-spin" />集計中…</div>
@@ -602,7 +602,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
                           </div>
                           <div className="relative text-right shrink-0">
                             <div className="font-mono font-black text-amber-300">{fmt(r.assets)}</div>
-                            <div className="text-[10px] text-emerald-400 font-bold">賞金 +{fmt(r.prize)} G</div>
+                            <div className="text-[10px] text-emerald-400 font-bold">賞金 +{fmt(r.prize)} Y</div>
                           </div>
                         </div>
                       );
@@ -717,7 +717,7 @@ export default function LifeGame({ balance, updateBalance, onBack, showToast, pl
               {prizeSplit(Math.max(2, players.length)).map((s, i) => (
                 <div key={i} className="flex justify-between text-[11px]">
                   <span className="text-gray-400">{i + 1}位</span>
-                  <span className="font-mono text-amber-300 font-bold">{fmt(Math.floor((room.pot || 0) * s))} G（{Math.round(s * 100)}%）</span>
+                  <span className="font-mono text-amber-300 font-bold">{fmt(Math.floor((room.pot || 0) * s))} Y（{Math.round(s * 100)}%）</span>
                 </div>
               ))}
             </div>

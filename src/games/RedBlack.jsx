@@ -54,7 +54,7 @@ const R_TRACK = 214;      // 玉が回る外周トラック半径
 const R_POCKET = 158;     // ポケットの半径
 const DISC = 480;         // 円盤の描画サイズ(px)
 
-/* ---------- ホイールの絵（SVG） ---------- */
+/* ---------- ホイールの絵（SVY） ---------- */
 const WheelFace = React.memo(function WheelFace({ highlight }) {
   const C = 200, R = 196;
   const sectors = WHEEL_ORDER.map((n, i) => {
@@ -352,8 +352,8 @@ export default function RedBlackView({ balance, updateBalance, onBack, showToast
     const stakedNow = Object.values(snapshot).reduce((a, b) => a + b, 0);
     if (win > 0) {
       playSfx(win - stakedNow >= stakedNow * 8 ? 'big' : 'win', soundRef.current);
-      showToast(`🎯 ${number}（${numColor(number) === 'red' ? '赤' : numColor(number) === 'black' ? '黒' : '緑'}）！ +${win.toLocaleString()} G`, 'success');
-      if (win - stakedNow >= 50000) emitNews(`🔴 ${playerName} がルーレットで ${number} を的中！ +${(win - stakedNow).toLocaleString()} G！`, 'jackpot');
+      showToast(`🎯 ${number}（${numColor(number) === 'red' ? '赤' : numColor(number) === 'black' ? '黒' : '緑'}）！ +${win.toLocaleString()} Y`, 'success');
+      if (win - stakedNow >= 50000) emitNews(`🔴 ${playerName} がルーレットで ${number} を的中！ +${(win - stakedNow).toLocaleString()} Y！`, 'jackpot');
     } else {
       playSfx('lose', soundRef.current);
       showToast(`😢 ${number} …ハズレ`, 'error');
@@ -376,7 +376,7 @@ export default function RedBlackView({ balance, updateBalance, onBack, showToast
           <button onClick={() => setSound(s => !s)} className="p-2 rounded-xl bg-white/5 border border-white/10 text-gray-300 hover:bg-white/10 transition">
             {sound ? <Volume2 size={16} /> : <VolumeX size={16} />}
           </button>
-          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{balance.toLocaleString()} G</div>
+          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{balance.toLocaleString()} Y</div>
         </div>
       </div>
 
@@ -406,14 +406,14 @@ export default function RedBlackView({ balance, updateBalance, onBack, showToast
                   <div className="text-left">
                     {payout > 0
                       ? <>
-                        <div className="text-2xl font-black text-emerald-400">+{payout.toLocaleString()} G</div>
+                        <div className="text-2xl font-black text-emerald-400">+{payout.toLocaleString()} Y</div>
                         <div className={`text-xs font-bold ${payout - staked >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                          収支 {payout - staked >= 0 ? '+' : ''}{(payout - staked).toLocaleString()} G
+                          収支 {payout - staked >= 0 ? '+' : ''}{(payout - staked).toLocaleString()} Y
                         </div>
                       </>
                       : <>
                         <div className="text-2xl font-black text-red-400">ハズレ</div>
-                        <div className="text-red-400/80 text-xs">-{staked.toLocaleString()} G</div>
+                        <div className="text-red-400/80 text-xs">-{staked.toLocaleString()} Y</div>
                       </>}
                   </div>
                 </div>
@@ -509,7 +509,7 @@ export default function RedBlackView({ balance, updateBalance, onBack, showToast
             <div className="flex flex-wrap items-center gap-2 mt-3">
               <div className="flex-1 min-w-[120px]">
                 <div className="text-[10px] text-gray-400 font-bold">合計ベット</div>
-                <div className="font-mono text-2xl font-black text-amber-300">{totalBet.toLocaleString()} G</div>
+                <div className="font-mono text-2xl font-black text-amber-300">{totalBet.toLocaleString()} Y</div>
               </div>
               <button onClick={repeatBets} disabled={phase !== 'BETTING' || !lastBets}
                 className="flex items-center gap-1.5 bg-white/5 hover:bg-white/15 text-gray-300 font-bold py-2.5 px-3 rounded-xl transition disabled:opacity-30 text-xs">

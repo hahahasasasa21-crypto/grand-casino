@@ -161,7 +161,7 @@ export default function ProfileView({
     <div className="p-4 md:p-8 max-w-3xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> {isOther ? '戻る' : 'メニューに戻る'}</button>
-        {!isOther && <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>}
+        {!isOther && <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>}
       </div>
 
       {/* 名刺 */}
@@ -277,7 +277,7 @@ export default function ProfileView({
                     <div className="text-[10px] font-black text-white truncate">{ic.name}</div>
                     {active ? <div className="text-[9px] font-black text-amber-300">使用中</div>
                       : owned ? <div className="text-[9px] text-emerald-300 font-bold">所持</div>
-                        : <div className="text-[9px] font-mono text-gray-400">{fmt(ic.price)}G</div>}
+                        : <div className="text-[9px] font-mono text-gray-400">{fmt(ic.price)}Y</div>}
                   </button>
                 );
               })}
@@ -300,7 +300,7 @@ export default function ProfileView({
                     </div>
                     <button onClick={() => onBuyTag && onBuyTag(t)} disabled={busy || !vip || balance < t.price}
                       className="px-3 py-1.5 rounded-xl bg-amber-400 text-black text-[11px] font-black shrink-0 disabled:opacity-30">
-                      {vip ? `${fmt(t.price)} G` : 'VIP限定'}
+                      {vip ? `${fmt(t.price)} Y` : 'VIP限定'}
                     </button>
                   </div>
                 )

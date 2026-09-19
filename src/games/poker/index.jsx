@@ -20,7 +20,7 @@ export default function PokerView(props) {
           <ArrowLeft size={20} /> 戻る
         </button>
         <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">
-          {(props.balance || 0).toLocaleString()} G
+          {(props.balance || 0).toLocaleString()} Y
         </div>
       </div>
 

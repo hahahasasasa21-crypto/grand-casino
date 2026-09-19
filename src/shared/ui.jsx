@@ -53,19 +53,27 @@ export class ErrorBoundary extends React.Component {
 /* ==========================================================
    共通UIパーツ（カジノ調）
    ========================================================== */
-export function FeltBackdrop({ vip = false }) {
+/* 国ごとの内装。本国は緑のフェルト、ギャンブル大国は深紅、仕事国は鋼色 */
+const COUNTRY_SKIN = {
+  HOME: { base: '#07100c', glow: 'rgba(21,94,60,0.45)', a: 'bg-amber-500/10', b: 'bg-emerald-500/10' },
+  GAMBLE: { base: '#14060a', glow: 'rgba(150,20,48,0.42)', a: 'bg-amber-400/12', b: 'bg-rose-500/12' },
+  WORK: { base: '#080d14', glow: 'rgba(30,64,120,0.42)', a: 'bg-sky-400/10', b: 'bg-slate-400/10' },
+};
+
+export function FeltBackdrop({ vip = false, country = 'HOME' }) {
   if (vip) return <RoyalBackdrop />;
+  const sk = COUNTRY_SKIN[country] || COUNTRY_SKIN.HOME;
   return (
     <div className="fixed inset-0 -z-10 pointer-events-none">
-      <div className="absolute inset-0 bg-[#07100c]" />
+      <div className="absolute inset-0 transition-colors duration-700" style={{ background: sk.base }} />
       <div className="absolute inset-0" style={{
-        background: 'radial-gradient(ellipse at 50% 0%, rgba(21,94,60,0.45) 0%, rgba(7,16,12,0) 60%)'
+        background: `radial-gradient(ellipse at 50% 0%, ${sk.glow} 0%, rgba(0,0,0,0) 60%)`
       }} />
       <div className="absolute inset-0 opacity-[0.06]" style={{
         backgroundImage: 'repeating-linear-gradient(45deg, #ffffff 0px, #ffffff 1px, transparent 1px, transparent 7px)'
       }} />
-      <div className="absolute -top-24 left-1/5 w-[28rem] h-[28rem] rounded-full blur-3xl bg-amber-500/10" />
-      <div className="absolute bottom-0 right-1/5 w-[28rem] h-[28rem] rounded-full blur-3xl bg-emerald-500/10" />
+      <div className={`absolute -top-24 left-1/5 w-[28rem] h-[28rem] rounded-full blur-3xl ${sk.a}`} />
+      <div className={`absolute bottom-0 right-1/5 w-[28rem] h-[28rem] rounded-full blur-3xl ${sk.b}`} />
     </div>
   );
 }

@@ -11,8 +11,11 @@ import {
   curriculumOf, totalSteps, myDeviation, admissionLine, canEnroll, eduLevelOf, EDU_NAME,
   CRAM_COURSES, cramOf, prepBonusOf, RETRY_MS, EXAM_EVERY,
   entryFee, tuitionFee, entranceTask, recsOf, REC_LABEL, VIP_TUITION,
+  seatsLeft, capacityOf, uniRecsOf, uniRecommendPerk, sportsRecPerk, coversLabel,
+  scholarshipOf, nextScholarship, SCHOLARSHIPS,
 } from './schools.js';
 import { careerOf, CAREERS } from '../work/jobs.js';
+import { COUNTRIES, countryOf } from '../../shared/world.js';
 
 /* ==========================================================
    学校 — 入学・授業・テスト・卒業、そして塾
@@ -67,7 +70,7 @@ function ResultCard({ data, onClose }) {
           <span className={`font-mono font-black ${l.tone || 'text-amber-300'}`}>{l.value}</span>
         </div>
       ))}
-      {data.note && <p className={`text-xs font-bold mt-3 ${data.ok ? 'text-emerald-300' : 'text-red-300'}`}>{data.note}</p>}
+      {data.note && <p className={`text-xs font-bold mt-3 whitespace-pre-line ${data.ok ? 'text-emerald-300' : 'text-red-300'}`}>{data.note}</p>}
       <GoldButton onClick={onClose} className="w-full py-3 mt-4">つづける</GoldButton>
     </Panel>
   );
@@ -77,6 +80,7 @@ function ResultCard({ data, onClose }) {
 export default function SchoolView({
   balance, updateBalance, onBack, showToast, playerName, emitNews,
   edu = {}, licenses = [], items = {}, workExp = 0, saveEdu, onUseItem, vip = false,
+  players = [], country = 'HOME', club = {},
 }) {
   const [openRecs, setOpenRecs] = useState(null);
   const [tab, setTab] = useState('CAMPUS');    // CAMPUS | HIGH | UNI | VOC | CRAM
@@ -92,6 +96,9 @@ export default function SchoolView({
   const myDev = myDeviation(edu, licenses, prepBonus);
   const eduLevel = eduLevelOf(edu);
   const prepared = (edu.prepared || []).map(x => x.q || x);
+  /* 就学金制度：いい高校をいい成績で出ていると、そのあとの学費が軽くなる */
+  const scholar = useMemo(() => scholarshipOf(edu), [edu]);
+  const nextSch = useMemo(() => nextScholarship(edu), [edu]);
 
   const save = useCallback(async (patch) => {
     try { await saveEdu(patch); } catch (e) { showToast('保存に失敗しました。', 'error'); }
@@ -108,15 +115,30 @@ export default function SchoolView({
 
   const slotOf = (kind) => (kind === 'HIGH' ? 'hs' : kind === 'UNI' ? 'uni' : 'voc');
 
+  /** その学校に残っている席（自分は数えない） */
+  const seatsOf = useCallback((school) => seatsLeft(school, players, playerName), [players, playerName]);
+
+  /** 入試で効く推薦（高校からの推薦＋スポーツ推薦）をまとめる */
+  const entrancePerk = useCallback((school) => {
+    const u = uniRecommendPerk(edu, school);
+    const s = sportsRecPerk(club, school);
+    return {
+      skip: u.skip || s.skip,
+      ease: Math.max(u.ease || 0, s.ease || 0),
+      diffDown: u.diffDown || 0,
+      notes: [...(u.notes || []), ...(s.notes || [])],
+    };
+  }, [edu, club]);
+
   /* ---------- 入試 ---------- */
   const startEntrance = async (school, backdoor = false) => {
     if (busyRef.current) return;
-    const chk = canEnroll({ ...school }, edu, now, { backdoor });
+    const chk = canEnroll({ ...school }, edu, now, { backdoor, seats: seatsOf(school), country });
     if (!chk.ok) { showToast(chk.reason, 'warning'); return; }
 
     if (backdoor) {
       const cost = school.backdoor;
-      if (balance < cost) { showToast(`寄付金 ${fmt(cost)} G が足りません。`, 'error'); return; }
+      if (balance < cost) { showToast(`寄付金 ${fmt(cost)} Y が足りません。`, 'error'); return; }
       busyRef.current = true; setBusy(true);
       try { await updateBalance(-cost); } catch (e) { busyRef.current = false; setBusy(false); return; }
       busyRef.current = false; setBusy(false);
@@ -125,22 +147,30 @@ export default function SchoolView({
       return;
     }
 
-    const fee = entryFee(school, vip);
-    if (balance < fee) { showToast(`入学金 ${fmt(fee)} G が足りません。`, 'error'); return; }
+    const fee = entryFee(school, vip, scholar);
+    if (balance < fee) { showToast(`入学金 ${fmt(fee)} Y が足りません。`, 'error'); return; }
     busyRef.current = true; setBusy(true);
     try { await updateBalance(-fee); }
     catch (e) { busyRef.current = false; setBusy(false); return; }
     busyRef.current = false; setBusy(false);
-    const line = admissionLine(school, myDev);
+
+    // 推薦で試験が免除されることがある
+    const perk = entrancePerk(school);
+    if (perk.skip) {
+      await enroll(school, false, perk.notes);
+      return;
+    }
+    const line = Math.max(0.12, admissionLine(school, myDev) - (perk.ease || 0));
     const t = entranceTask(school);
     setTask({
       kind: 'ENTRANCE', school, line, ...t,
+      diff: Math.max(1, (t.diff || 1) - (perk.diffDown || 0)),
       title: `${school.name} 入学試験`,
-      sub: `偏差値 ${school.dev}／あなた ${myDev}／合格ライン ${Math.round(line * 100)}％${t.game === 'FLASH' ? '／⚡フラッシュ暗算' : ''}`,
+      sub: `偏差値 ${school.dev}／あなた ${myDev}／合格ライン ${Math.round(line * 100)}％${perk.ease ? `（推薦 -${Math.round(perk.ease * 100)}pt）` : ''}${t.game === 'FLASH' ? '／⚡フラッシュ暗算' : ''}`,
     });
   };
 
-  const enroll = async (school, viaBackdoor = false) => {
+  const enroll = async (school, viaBackdoor = false, recNotes = null) => {
     const slot = slotOf(school.kind);
     const t = Date.now();
     await save({
@@ -150,8 +180,22 @@ export default function SchoolView({
       },
     });
     playSfx('win');
-    if (emitNews && (school.key === 'YUTA_UNI' || school.key === 'YUTA_HS' || school.key === 'BANK_UNI' || school.key === 'CASINO_UNI')) {
+    const TOP = ['YUTA_UNI', 'YUTA_HS', 'BANK_UNI', 'CASINO_UNI', 'CASINO_UNI_G', 'GAMBLE_UNI', 'SHIGOTO_UNI'];
+    if (emitNews && TOP.includes(school.key)) {
       emitNews(`${school.icon} ${playerName} が【${school.name}】に${viaBackdoor ? '入学（寄付金）' : '合格'}！`, 'jackpot');
+    }
+    if (recNotes && recNotes.length) {
+      setResult({
+        headline: 'RECOMMENDATION', title: school.name,
+        big: '推薦合格', color: '#fbbf24',
+        sub: '試験は免除されました', ok: true,
+        lines: [
+          { label: '入学金', value: `-${fmt(entryFee(school, vip, scholar))} Y`, tone: 'text-red-300' },
+          { label: '偏差値', value: `${school.dev}` },
+          ...recNotes.map(n => ({ label: '推薦', value: n, tone: 'text-emerald-300' })),
+        ],
+        note: `🎉 ${school.name} に入学しました！`,
+      });
     }
     setTab('CAMPUS');
   };
@@ -175,7 +219,7 @@ export default function SchoolView({
       lines: [
         { label: '学校の偏差値', value: `${school.dev}` },
         { label: 'あなたの偏差値', value: `${myDev}`, tone: myDev >= school.dev ? 'text-emerald-300' : 'text-red-300' },
-        { label: '入学金', value: `-${fmt(entryFee(school, vip))} G`, tone: 'text-red-300' },
+        { label: '入学金', value: `-${fmt(entryFee(school, vip, scholar))} Y`, tone: 'text-red-300' },
       ],
       note: passed
         ? `🎉 ${school.name} に入学しました！`
@@ -190,16 +234,21 @@ export default function SchoolView({
     const plan = curriculumOf(school);
     const step = plan[rec.progress];
     if (!step) return;
-    const tui = tuitionFee(school, vip);
-    if (balance < tui) { showToast(`授業料 ${fmt(tui)} G が足りません。`, 'error'); return; }
-    const subj = subjectOf(step.subject);
+    const tui = tuitionFee(school, vip, scholar);
+    if (balance < tui) { showToast(`授業料 ${fmt(tui)} Y が足りません。`, 'error'); return; }
     const isExam = step.kind !== 'LESSON';
+    // 定期テストは「これまでに習った範囲」から1科目出る
+    const covers = step.covers && step.covers.length ? step.covers : [step.subject];
+    const pick = isExam ? covers[(rec.progress + covers.length) % covers.length] : step.subject;
+    const subj = subjectOf(pick);
     setTask({
-      kind: 'LESSON', school, step,
-      game: subj.game, subject: step.subject,
+      kind: 'LESSON', school, step, examSubject: pick,
+      game: subj.game, subject: pick,
       diff: Math.max(1, Math.min(5, Math.round((school.dev - 34) / 10) + (isExam ? 1 : 0))),
       title: `${school.name}・${isExam ? (step.kind === 'FINAL' ? '卒業試験' : '定期テスト') : '授業'}（${subj.name}）`,
-      sub: `${rec.progress + 1} / ${totalSteps(school)}　授業料 ${fmt(tui)} G`,
+      sub: isExam
+        ? `${rec.progress + 1} / ${totalSteps(school)}　出題範囲：${coversLabel(step)}　授業料 ${fmt(tui)} Y`
+        : `${rec.progress + 1} / ${totalSteps(school)}　授業料 ${fmt(tui)} Y`,
       tuition: tui,
     });
   };
@@ -215,10 +264,14 @@ export default function SchoolView({
     const progress = (rec.progress || 0) + 1;
     const grades = { ...(rec.grades || {}) };
     if (isExam) {
-      const prevN = grades[`${step.subject}_n`] || 0;
-      const prev = grades[step.subject] || 0;
-      grades[step.subject] = Math.round(((prev * prevN + perf) / (prevN + 1)) * 1000) / 1000;
-      grades[`${step.subject}_n`] = prevN + 1;
+      // 定期テストは出題範囲ぜんぶの成績になる
+      const covers = step.covers && step.covers.length ? step.covers : [step.subject];
+      for (const sk of covers) {
+        const prevN = grades[`${sk}_n`] || 0;
+        const prev = grades[sk] || 0;
+        grades[sk] = Math.round(((prev * prevN + perf) / (prevN + 1)) * 1000) / 1000;
+        grades[`${sk}_n`] = prevN + 1;
+      }
     }
     const cleanGrades = Object.fromEntries(Object.entries(grades).filter(([k]) => !k.endsWith('_n')));
     const gpa = gpaOf(cleanGrades);
@@ -239,9 +292,14 @@ export default function SchoolView({
     await save(patch);
     playSfx(perf >= 0.6 ? 'win' : 'click');
 
+    // 高校を卒業した瞬間、就学金制度に認定されることがある
+    const gotScholar = (done && school.kind === 'HIGH')
+      ? scholarshipOf({ ...edu, hs: { ...(edu.hs || {}), key: school.key, gpa, graduated: true } })
+      : null;
+
     if (done && emitNews) {
-      emitNews(`${school.icon} ${playerName} が【${school.name}】を卒業（GPA ${gpa.toFixed(1)}）！`,
-        school.key === 'YUTA_UNI' ? 'jackpot' : 'info');
+      emitNews(`${school.icon} ${playerName} が【${school.name}】を卒業（GPA ${gpa.toFixed(1)}）！${gotScholar ? ` ${gotScholar.icon}${gotScholar.name} に認定！` : ''}`,
+        school.key === 'YUTA_UNI' || gotScholar?.entry >= 1 ? 'jackpot' : 'info');
     }
 
     const gl = gradeLetter(gpa);
@@ -253,14 +311,21 @@ export default function SchoolView({
       sub: done ? `最終GPA ${gpa.toFixed(1)}（${gl.g}）` : isExam ? '定期テストの結果' : '今日の授業',
       ok: true,
       lines: [
-        { label: '授業料', value: `-${fmt(tuitionFee(school, vip))} G`, tone: 'text-red-300' },
+        { label: '授業料', value: `-${fmt(tuitionFee(school, vip, scholar))} Y`, tone: 'text-red-300' },
         { label: '通算経験', value: `+${gainExp}`, tone: 'text-emerald-300' },
         { label: '学力', value: `+${gainStudy}`, tone: 'text-sky-300' },
         { label: '進度', value: `${progress} / ${totalSteps(school)}` },
         ...(isExam ? [{ label: 'GPA', value: gpa.toFixed(1), tone: 'text-amber-300' }] : []),
       ],
       note: done
-        ? (school.grant ? `🎉 卒業！ ${licenseOf(school.grant)?.name} を取得しました。` : '🎉 卒業おめでとう！')
+        ? [
+          school.grant ? `🎉 卒業！ ${licenseOf(school.grant)?.name} を取得しました。` : '🎉 卒業おめでとう！',
+          gotScholar
+            ? (gotScholar.entry >= 1
+              ? `${gotScholar.icon} 就学金制度「${gotScholar.name}」に認定！ このあとの大学・専門学校の学費が全額免除になります。`
+              : `${gotScholar.icon} 就学金制度「${gotScholar.name}」に認定！ 入学金 ${Math.round(gotScholar.entry * 100)}％引き・授業料 ${Math.round(gotScholar.tuition * 100)}％引きになります。`)
+            : '',
+        ].filter(Boolean).join('\n')
         : '',
     });
   };
@@ -268,7 +333,7 @@ export default function SchoolView({
   /* ---------- 塾 ---------- */
   const takeCram = async (course, subject) => {
     if (busyRef.current) return;
-    if (balance < course.cost) { showToast(`受講料 ${fmt(course.cost)} G が足りません。`, 'error'); return; }
+    if (balance < course.cost) { showToast(`受講料 ${fmt(course.cost)} Y が足りません。`, 'error'); return; }
     busyRef.current = true; setBusy(true);
     try { await updateBalance(-course.cost); }
     catch (e) { busyRef.current = false; setBusy(false); return; }
@@ -288,7 +353,7 @@ export default function SchoolView({
       big: `+${course.bonus}`, color: '#60a5fa',
       sub: `偏差値が ${course.hours} 時間のあいだ上がります`, ok: true,
       lines: [
-        { label: '受講料', value: `-${fmt(course.cost)} G`, tone: 'text-red-300' },
+        { label: '受講料', value: `-${fmt(course.cost)} Y`, tone: 'text-red-300' },
         { label: '偏差値', value: `${myDev} → ${myDeviation(edu, licenses, prepBonusOf({ bonus: course.bonus, until }, items))}`, tone: 'text-emerald-300' },
         ...(drawn.length ? [{ label: '出そうな問題', value: `${drawn.length} 問`, tone: 'text-sky-300' }] : []),
       ],
@@ -380,11 +445,12 @@ export default function SchoolView({
     <div className="p-4 md:p-8 max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> メニューに戻る</button>
-        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
       </div>
 
       <Panel gold className="p-5 mb-4">
-        <SectionTitle icon={<GraduationCap size={26} />} title="YUTAPON ACADEMY" sub="高校・大学・専門学校・塾" />
+        <SectionTitle icon={<GraduationCap size={26} />} title="YUTAPON ACADEMY"
+          sub={`${countryOf(country)?.icon || '🎰'} ${countryOf(country)?.name || 'YUTAPON-GROUP'}｜高校・大学・専門学校・塾`} />
         <div className="grid grid-cols-4 gap-2 mt-3">
           <div className="p-2.5 rounded-xl bg-black/40 border border-white/10 text-center">
             <div className="text-[9px] text-gray-500 font-bold">偏差値</div>
@@ -407,6 +473,50 @@ export default function SchoolView({
         <p className="text-[10px] text-gray-500 mt-2">
           偏差値は「学力 ＋ 資格の数 ＋ 出身高校 ＋ 塾やお守り」で決まります。学校の偏差値を上回るほど合格ラインが下がります（下限あり）。
         </p>
+
+        {/* 就学金制度 */}
+        {scholar ? (
+          <div className="mt-3 p-3 rounded-2xl border"
+            style={{ borderColor: scholar.color + '55', background: scholar.color + '12' }}>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xl leading-none">{scholar.icon}</span>
+              <span className="text-[13px] font-black" style={{ color: scholar.color }}>就学金制度・{scholar.name}</span>
+              <span className="text-[10px] font-bold text-gray-400">
+                {scholar.from.icon}{scholar.from.name}（偏差値 {scholar.from.dev}）を GPA {scholar.gpa.toFixed(1)} で卒業
+              </span>
+            </div>
+            <p className="text-[11px] text-gray-300 mt-1">
+              {scholar.entry >= 1
+                ? '大学・専門学校の 入学金と授業料が 全額免除 になります。'
+                : `大学・専門学校の 入学金 ${Math.round(scholar.entry * 100)}％引き・授業料 ${Math.round(scholar.tuition * 100)}％引き。`}
+              {vip ? ' VIP の 1割引とも重ねてかかります。' : ''}
+            </p>
+          </div>
+        ) : (
+          <div className="mt-3 p-3 rounded-2xl border border-white/10 bg-black/30">
+            <div className="text-[12px] font-black text-gray-300 mb-0.5">🎓 就学金制度</div>
+            <p className="text-[11px] text-gray-500 leading-relaxed">
+              偏差値の高い高校を、いい成績（GPA）で卒業すると、そのあとの大学・専門学校の学費が軽くなります。
+              {nextSch && (
+                <span className="text-amber-300 font-bold">
+                  {' '}いまの高校なら、あと GPA +{nextSch.need} で「{nextSch.icon}{nextSch.name}」に届きます。
+                </span>
+              )}
+            </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 mt-2">
+              {SCHOLARSHIPS.map(t => (
+                <div key={t.key} className="px-2 py-1.5 rounded-xl border text-center"
+                  style={{ borderColor: t.color + '33', background: t.color + '0c' }}>
+                  <div className="text-[11px] font-black" style={{ color: t.color }}>{t.icon}{t.name}</div>
+                  <div className="text-[9px] text-gray-500">偏差値 {t.dev}+ ／ GPA {t.gpa}+</div>
+                  <div className="text-[9px] font-bold text-gray-400">
+                    {t.entry >= 1 ? '学費 全額免除' : `入学金 -${Math.round(t.entry * 100)}%／授業 -${Math.round(t.tuition * 100)}%`}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </Panel>
 
       <div className="grid grid-cols-5 gap-1.5 mb-4">
@@ -446,7 +556,7 @@ export default function SchoolView({
                 <div className="mb-3">
                   <div className="flex justify-between text-[10px] font-bold mb-1">
                     <span className="text-gray-400">進度 {rec.progress} / {totalSteps(school)}</span>
-                    <span className="text-gray-500">授業料 {fmt(tuitionFee(school, vip))} G / コマ</span>
+                    <span className="text-gray-500">授業料 {fmt(tuitionFee(school, vip, scholar))} Y / コマ</span>
                   </div>
                   <Bar value={rec.progress} max={totalSteps(school)} />
                 </div>
@@ -482,9 +592,18 @@ export default function SchoolView({
                       <div className="text-[11px] text-gray-500">
                         {step.kind === 'LESSON' ? '学力と経験が入ります。' : 'この結果が GPA になります。'}
                       </div>
+                      {step.kind !== 'LESSON' && (
+                        <div className="mt-1.5 flex flex-wrap items-center gap-1">
+                          <span className="text-[10px] font-black text-rose-300">出題範囲</span>
+                          {(step.covers || []).map(sk => (
+                            <span key={sk} className="text-[9px] font-bold px-1.5 py-0.5 rounded-md border border-white/10"
+                              style={{ color: subjectOf(sk).color }}>{subjectOf(sk).icon}{subjectOf(sk).name}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    <GoldButton onClick={startLesson} disabled={balance < tuitionFee(school, vip)} className="w-full py-3.5 text-lg">
-                      授業を受ける（{fmt(tuitionFee(school, vip))} G）
+                    <GoldButton onClick={startLesson} disabled={balance < tuitionFee(school, vip, scholar)} className="w-full py-3.5 text-lg">
+                      授業を受ける（{fmt(tuitionFee(school, vip, scholar))} Y）
                     </GoldButton>
                   </>
                 ) : (
@@ -551,13 +670,21 @@ export default function SchoolView({
               大学を受験するには高校を卒業している必要があります。
             </div>
           )}
-          {KINDS.find(x => x.k === tab).list.map(raw => {
+          {KINDS.find(x => x.k === tab).list.filter(s => (s.country || 'HOME') === country).length === 0 && (
+            <div className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-[11px] font-bold text-gray-400">
+              いまいる国には{KINDS.find(x => x.k === tab).label}がありません。旅行で別の国へ移動してください。
+            </div>
+          )}
+          {KINDS.find(x => x.k === tab).list.filter(s => (s.country || 'HOME') === country).map(raw => {
             const school = { ...raw, kind: tab };
-            const line = admissionLine(school, myDev);
-            const chk = canEnroll(school, edu, now);
+            const perk = entrancePerk(school);
+            const line = Math.max(0.12, admissionLine(school, myDev) - (perk.ease || 0));
+            const seats = seatsOf(school);
+            const chk = canEnroll(school, edu, now, { seats, country });
             const rec = edu[slotOf(tab)];
             const done = rec?.graduated && rec.key === school.key;
             const chance = myDev - school.dev;
+            const uRecs = uniRecsOf(school);
             return (
               <div key={school.key}
                 className={`p-3 rounded-2xl border transition
@@ -573,6 +700,15 @@ export default function SchoolView({
                         偏差値 {school.dev}
                       </span>
                       {done && <span className="text-[10px] font-black text-emerald-300 flex items-center gap-0.5"><Check size={11} />卒業</span>}
+                      <span className={`text-[10px] font-black px-1.5 py-0.5 rounded-md border
+                        ${seats > 0 ? 'text-sky-300 border-sky-400/30 bg-sky-500/10' : 'text-red-300 border-red-400/40 bg-red-500/15'}`}>
+                        定員 {capacityOf(school) - seats}/{capacityOf(school)}{seats <= 0 ? '・満員' : ''}
+                      </span>
+                      {(school.clubs || []).length > 0 && (
+                        <span className="text-[10px] font-black px-1.5 py-0.5 rounded-md border border-rose-400/30 bg-rose-500/10 text-rose-300">
+                          部活 {(school.clubs || []).length}
+                        </span>
+                      )}
                     </div>
                     <p className="text-[11px] text-gray-500">{school.desc}</p>
                     {school.perk && <p className="text-[10px] text-sky-300/85 mt-0.5">✨ {school.perk}</p>}
@@ -584,7 +720,29 @@ export default function SchoolView({
                       {school.subjects.length > 8 && <span className="text-[9px] text-gray-500">＋{school.subjects.length - 8}</span>}
                     </div>
                     {school.flash && <p className="text-[10px] font-black text-amber-300 mt-0.5">⚡ 入試に フラッシュ暗算 が出ます（難度 ★{school.flash}）</p>}
+                    {perk.notes.map((n, i) => (
+                      <p key={i} className="text-[10px] font-black text-emerald-300 mt-0.5">{n.startsWith('🏅') ? n : `🤝 ${n}`}</p>
+                    ))}
                     {!chk.ok && !done && <p className="text-[10px] text-red-300 font-bold mt-1 flex items-center gap-1"><Lock size={9} />{chk.reason}</p>}
+                    {uRecs.length > 0 && (
+                      <button onClick={(e) => { e.stopPropagation(); setOpenRecs(openRecs === `U${school.key}` ? null : `U${school.key}`); }}
+                        className="mt-1 mr-3 text-[10px] font-black text-violet-300 hover:text-violet-200">
+                        🎓 推薦が来ている大学（{uRecs.length}）{openRecs === `U${school.key}` ? ' ▲' : ' ▼'}
+                      </button>
+                    )}
+                    {openRecs === `U${school.key}` && (
+                      <div className="mt-1.5 space-y-1">
+                        {uRecs.map((r, i) => (
+                          <div key={i} className="flex items-center gap-1.5 px-2 py-1 rounded-lg border"
+                            style={{ borderColor: r.label.color + '44', background: r.label.color + '12' }}>
+                            <span className="text-[11px]">{r.label.icon}</span>
+                            <span className="text-[10px] font-black text-white truncate flex-1">{r.school.icon}{r.school.name}</span>
+                            <span className="text-[10px] font-bold shrink-0" style={{ color: r.label.color }}>{r.label.name}</span>
+                            {r.gpa && <span className="text-[9px] text-gray-400 shrink-0">GPA {r.gpa}+</span>}
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {recsOf(school).length > 0 && (
                       <button onClick={(e) => { e.stopPropagation(); setOpenRecs(openRecs === school.key ? null : school.key); }}
                         className="mt-1 text-[10px] font-black text-sky-300 hover:text-sky-200">
@@ -610,9 +768,16 @@ export default function SchoolView({
                     )}
                   </div>
                   <div className="text-right shrink-0 w-24">
-                    <div className="font-mono font-black text-amber-300 text-sm">{fmt(entryFee(school, vip))}</div>
-                    <div className="text-[9px] text-gray-500">入学金{vip ? '（VIP 0.9倍）' : ''}</div>
-                    <div className="text-[10px] text-gray-400 mt-0.5">授業 {fmt(tuitionFee(school, vip))}×{totalSteps(school)}</div>
+                    <div className="font-mono font-black text-amber-300 text-sm">{fmt(entryFee(school, vip, scholar))}</div>
+                    <div className="text-[9px] text-gray-500">
+                      入学金{vip ? '（VIP 0.9倍）' : ''}
+                    </div>
+                    {scholar && tab !== 'HIGH' && (
+                      <div className="text-[9px] font-black" style={{ color: scholar.color }}>
+                        {scholar.icon}{scholar.entry >= 1 ? '全額免除' : `就学金 -${Math.round(scholar.entry * 100)}%`}
+                      </div>
+                    )}
+                    <div className="text-[10px] text-gray-400 mt-0.5">授業 {fmt(tuitionFee(school, vip, scholar))}×{totalSteps(school)}</div>
                     <div className="text-[10px] font-black mt-0.5" style={{ color: line > 0.8 ? '#f87171' : line > 0.6 ? '#fbbf24' : '#34d399' }}>
                       合格 {Math.round(line * 100)}％
                     </div>
@@ -626,7 +791,7 @@ export default function SchoolView({
                       backdoorConfirm === school.key ? (
                         <button onClick={() => startEntrance(school, true)} disabled={busy || balance < school.backdoor}
                           className="mt-1 w-full px-2 py-1.5 rounded-xl bg-red-600 text-white text-[10px] font-black disabled:opacity-30">
-                          本当に {fmt(school.backdoor)} G？
+                          本当に {fmt(school.backdoor)} Y？
                         </button>
                       ) : (
                         <button onClick={() => setBackdoorConfirm(school.key)}
@@ -666,7 +831,7 @@ export default function SchoolView({
                   <div className="font-black text-white text-sm">{c.name}</div>
                   <div className="text-[11px] text-gray-500">{c.desc}</div>
                 </div>
-                <div className="font-mono font-black text-amber-300 text-sm shrink-0">{fmt(c.cost)} G</div>
+                <div className="font-mono font-black text-amber-300 text-sm shrink-0">{fmt(c.cost)} Y</div>
               </div>
               {c.key === 'LIGHT' ? (
                 <GoldButton onClick={() => takeCram(c, 'JP')} disabled={busy || balance < c.cost} className="w-full py-2 mt-2 text-sm">受講する</GoldButton>

@@ -51,14 +51,14 @@ export default function PokerSolo({ balance, updateBalance, onBack, showToast, p
   /* ---------- 着席／退席 ---------- */
   const sitDown = async () => {
     const buyin = stake.buyin;
-    if (balance < buyin) { showToast(`このテーブルは ${fmt(buyin)} G のバイインが必要です。`, 'error'); return; }
+    if (balance < buyin) { showToast(`このテーブルは ${fmt(buyin)} Y のバイインが必要です。`, 'error'); return; }
     try { await updateBalance(-buyin); } catch (e) { return; }
     const t = createTable(playerName || 'YOU', seatCount, stake, buyin);
     setTable(t);
     setSessionStart(buyin);
     setHand(null);
     playSfx('coin', soundRef.current);
-    showToast(`💺 ${stake.label} テーブルに ${fmt(buyin)} G で着席しました。`, 'success');
+    showToast(`💺 ${stake.label} テーブルに ${fmt(buyin)} Y で着席しました。`, 'success');
   };
 
   const leaveTable = async () => {
@@ -68,8 +68,8 @@ export default function PokerSolo({ balance, updateBalance, onBack, showToast, p
     if (hand && !hand.finished) { showToast('ハンド進行中は退席できません。', 'error'); return; }
     if (stack > 0) { try { await updateBalance(stack); } catch (e) { /* noop */ } }
     const net = stack - sessionStart;
-    if (net >= 20000) emitNews(`🃏 ${playerName} がテキサスホールデムで +${fmt(net)} G を持ち帰りました！`, 'poker');
-    showToast(`💰 ${fmt(stack)} G を持って退席しました（収支 ${net >= 0 ? '+' : ''}${fmt(net)} G）`, net >= 0 ? 'success' : 'warning');
+    if (net >= 20000) emitNews(`🃏 ${playerName} がテキサスホールデムで +${fmt(net)} Y を持ち帰りました！`, 'poker');
+    showToast(`💰 ${fmt(stack)} Y を持って退席しました（収支 ${net >= 0 ? '+' : ''}${fmt(net)} Y）`, net >= 0 ? 'success' : 'warning');
     clearTimeout(cpuTimer.current);
     setTable(null); setHand(null);
   };
@@ -159,7 +159,7 @@ export default function PokerSolo({ balance, updateBalance, onBack, showToast, p
       <div className="p-4 md:p-6 max-w-4xl mx-auto">
         <div className="w-full flex justify-between items-center mb-4">
           <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
-          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
         </div>
 
         <Panel gold className="p-6">
@@ -173,7 +173,7 @@ export default function PokerSolo({ balance, updateBalance, onBack, showToast, p
                 <button key={s.label} onClick={() => setStakeIdx(i)}
                   className={`p-3 rounded-2xl border-2 text-left transition ${stakeIdx === i ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40 hover:bg-white/5'}`}>
                   <div className="text-lg font-black text-white">{s.label}</div>
-                  <div className="text-[11px] text-gray-400">バイイン {fmt(s.buyin)} G</div>
+                  <div className="text-[11px] text-gray-400">バイイン {fmt(s.buyin)} Y</div>
                 </button>
               ))}
             </div>
@@ -192,7 +192,7 @@ export default function PokerSolo({ balance, updateBalance, onBack, showToast, p
           </div>
 
           <GoldButton onClick={sitDown} disabled={balance < stake.buyin} className="w-full py-4 text-lg">
-            {fmt(stake.buyin)} G で着席する
+            {fmt(stake.buyin)} Y で着席する
           </GoldButton>
           {balance < stake.buyin && <p className="text-[11px] text-red-400 mt-2 text-center">所持金が足りません。</p>}
 
@@ -239,7 +239,7 @@ export default function PokerSolo({ balance, updateBalance, onBack, showToast, p
               {(me ? me.stack : 0) - sessionStart >= 0 ? '+' : ''}{fmt((me ? me.stack : 0) - sessionStart)}
             </div>
           </div>
-          <div className="bg-black/60 px-3 py-1.5 rounded-full border border-amber-500/30 font-mono text-base text-amber-300 font-bold">{fmt(balance)} G</div>
+          <div className="bg-black/60 px-3 py-1.5 rounded-full border border-amber-500/30 font-mono text-base text-amber-300 font-bold">{fmt(balance)} Y</div>
         </div>
       </div>
 

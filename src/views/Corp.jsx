@@ -11,7 +11,9 @@ import {
   levelOf, duePeriods, settleCompany, sharePrice, sellPrice, ownerEquity,
   bankPayable, canFound, MIN_BANK_RATE, MAX_BANK_RATE, EDU_REQ_LABEL,
   POST_KINDS, postKindOf, POSTING_GAMES, MAX_POSTINGS, POST_FEE, validPosting,
+  routesOf, airFareBounds, clampAirFare, MAX_ROUTES, ROUTE_FEE,
 } from '../shared/corp.js';
+import { COUNTRIES, countryOf, CLASSES, classOf, segKey, FARES } from '../shared/world.js';
 import { eduLevelOf } from '../games/school/schools.js';
 
 /* ==========================================================
@@ -30,7 +32,7 @@ function mmss(ms) {
 }
 
 /* ---------- 会社カード（毎秒の再描画で作り直されないよう外に出す） ---------- */
-function CompanyCard({ c, owner, playerName, now, amountIn, setAmountIn, onWithdraw, onInvest, onDivest, onRate, onOpenPost, onDeletePost }) {
+function CompanyCard({ c, owner, playerName, now, amountIn, setAmountIn, onWithdraw, onInvest, onDivest, onRate, onOpenPost, onDeletePost, onOpenRoute, onDeleteRoute }) {
     const t = corpTypeOf(c.type);
     const lv = levelOf(c);
     const price = sharePrice(c);
@@ -49,7 +51,7 @@ function CompanyCard({ c, owner, playerName, now, amountIn, setAmountIn, onWithd
             <div className="text-[11px] text-gray-500">{t?.name} ・ 代表 {c.owner} ・ 規模 Lv.{lv}/{MAX_LEVEL}</div>
           </div>
           <div className="text-right shrink-0">
-            <div className="font-mono font-black text-amber-300">{fmt(c.capital)} G</div>
+            <div className="font-mono font-black text-amber-300">{fmt(c.capital)} Y</div>
             <div className="text-[10px] text-gray-500">会社の資産</div>
           </div>
         </div>
@@ -76,7 +78,7 @@ function CompanyCard({ c, owner, playerName, now, amountIn, setAmountIn, onWithd
               <span className="text-[11px] font-mono text-white">金利 {((c.rate || 0) * 100).toFixed(2)}％／30分</span>
             </div>
             <div className="text-[10px] text-gray-400">
-              預かり金 {fmt(c.deposits)} G（{c.depositors || 0}口座）・利息に使える現金 {fmt(bankPayable(c))} G
+              預かり金 {fmt(c.deposits)} Y（{c.depositors || 0}口座）・利息に使える現金 {fmt(bankPayable(c))} Y
             </div>
             {owner && (
               <div className="flex gap-1 mt-1.5">
@@ -96,14 +98,14 @@ function CompanyCard({ c, owner, playerName, now, amountIn, setAmountIn, onWithd
           <div className="mb-3 p-2.5 rounded-xl bg-sky-500/10 border border-sky-400/30">
             <div className="flex items-center justify-between mb-1.5">
               <span className="text-[11px] font-black text-sky-300 flex items-center gap-1"><Users size={12} />求人（{(c.postings || []).length}/{MAX_POSTINGS}）</span>
-              <span className="text-[10px] text-gray-500">掲載料 {fmt(POST_FEE)} G</span>
+              <span className="text-[10px] text-gray-500">掲載料 {fmt(POST_FEE)} Y</span>
             </div>
             {(c.postings || []).map(pj => (
               <div key={pj.id} className="flex items-center gap-2 mb-1 px-2 py-1.5 rounded-lg bg-black/40 border border-white/10">
                 <span className="text-sm">{postKindOf(pj.kind).icon}</span>
                 <span className="text-[11px] font-black text-white truncate flex-1">{pj.name}</span>
                 <span className="text-[10px] text-gray-400">{gameOf(pj.game).icon}{gameOf(pj.game).name}</span>
-                <span className="text-[11px] font-mono font-black text-amber-300">{fmt(pj.pay)}G</span>
+                <span className="text-[11px] font-mono font-black text-amber-300">{fmt(pj.pay)}Y</span>
                 <button onClick={() => onDeletePost(c, pj.id)} className="text-[10px] font-black text-red-300 px-1.5">削除</button>
               </div>
             ))}
@@ -116,10 +118,43 @@ function CompanyCard({ c, owner, playerName, now, amountIn, setAmountIn, onWithd
           </div>
         )}
 
+        {/* 航空会社だけ：路線・クラス・運賃を決める */}
+        {owner && corpTypeOf(c.type)?.isAirline && (
+            <div className="mt-2 pt-2 border-t border-white/10">
+              <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+                <span className="text-[11px] font-black text-sky-300 flex items-center gap-1">🛩️ 就航路線（{routesOf(c).length}/{MAX_ROUTES}）</span>
+                <span className="text-[10px] text-gray-500">運賃の8割が会社の資産に</span>
+              </div>
+              {routesOf(c).map((r) => {
+                const [a, b] = r.seg.split('|');
+                return (
+                  <div key={r.seg} className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-black/40 border border-white/10 mb-1 flex-wrap">
+                    <span className="text-[11px] font-black text-white">
+                      {countryOf(a)?.icon}{countryOf(a)?.short} ↔ {countryOf(b)?.icon}{countryOf(b)?.short}
+                    </span>
+                    {CLASSES.map(cl => (
+                      r.cls?.[cl.key] ? (
+                        <span key={cl.key} className="text-[10px] font-mono font-black text-emerald-300">
+                          {cl.icon}{fmt(r.cls[cl.key])}
+                        </span>
+                      ) : null
+                    ))}
+                    <button onClick={() => onDeleteRoute(c, r.seg)} className="ml-auto text-[10px] font-black text-red-300 px-1.5">削除</button>
+                  </div>
+                );
+              })}
+              {routesOf(c).length < MAX_ROUTES && (
+                <button onClick={() => onOpenRoute(c)} className="w-full py-1.5 rounded-lg bg-sky-600/70 hover:bg-sky-500 text-white text-[11px] font-black">
+                  ＋ 路線をひらく（{fmt(ROUTE_FEE)} Y）
+                </button>
+              )}
+          </div>
+        )}
+
         {owner ? (
           <>
             <div className="text-[10px] text-gray-500 mb-1">
-              出金できる持ち分 <b className="text-amber-300">{fmt(ownerEquity(c))} G</b>
+              出金できる持ち分 <b className="text-amber-300">{fmt(ownerEquity(c))} Y</b>
               （預かり金と投資家のぶんは出せません）
             </div>
             <div className="flex gap-2">
@@ -132,7 +167,7 @@ function CompanyCard({ c, owner, playerName, now, amountIn, setAmountIn, onWithd
         ) : (
           <>
             <div className="text-[10px] text-gray-500 mb-1">
-              保有 <b className="text-sky-300">{held} 株</b>（評価 {fmt(held * sellPrice(c))} G）・売値は買値の92％
+              保有 <b className="text-sky-300">{held} 株</b>（評価 {fmt(held * sellPrice(c))} Y）・売値は買値の92％
             </div>
             <div className="flex gap-2">
               <input type="number" value={amountIn} onChange={e => setAmountIn(e.target.value)} placeholder="投資額 / 売却株数"
@@ -223,7 +258,7 @@ export default function CorpView({
       showToast(chk.edu ? chk.reason : `資格が足りません：${chk.miss.map(m => licenseOf(m)?.name || m).join('・')}`, 'error');
       return;
     }
-    if (balance < type.cost) { showToast(`設立費用 ${fmt(type.cost)} G が足りません。`, 'error'); return; }
+    if (balance < type.cost) { showToast(`設立費用 ${fmt(type.cost)} Y が足りません。`, 'error'); return; }
     if (companies.some(c => (c.name || '').trim() === nm)) { showToast('同じ名前の会社があります。', 'error'); return; }
     busyRef.current = true; setBusy(true);
     try {
@@ -263,7 +298,7 @@ export default function CorpView({
         paid = amount;
         tx.update(companyDoc(c.id), { capital: increment(-amount), updatedAt: Date.now() });
       });
-      if (paid > 0) { await updateBalance(paid); playSfx('coin'); showToast(`💰 ${fmt(paid)} G 出金しました。`, 'success'); setAmountIn(''); }
+      if (paid > 0) { await updateBalance(paid); playSfx('coin'); showToast(`💰 ${fmt(paid)} Y 出金しました。`, 'success'); setAmountIn(''); }
     } catch (e) {
       const m = String(e.message);
       showToast(m === 'over' ? 'オーナーの持ち分を超えています（預かり金と投資家のぶんは出せません）。' : '出金できませんでした。', 'error');
@@ -331,7 +366,7 @@ export default function CorpView({
           updatedAt: Date.now(),
         });
       });
-      if (paid > 0) { await updateBalance(paid); playSfx('coin'); showToast(`📉 株を売って ${fmt(paid)} G 受け取りました。`, 'success'); }
+      if (paid > 0) { await updateBalance(paid); playSfx('coin'); showToast(`📉 株を売って ${fmt(paid)} Y 受け取りました。`, 'success'); }
       else showToast('会社に現金がなく、売却できませんでした。', 'warning');
       setAmountIn('');
     } catch (e) { showToast('売却に失敗しました。', 'error'); }
@@ -349,6 +384,78 @@ export default function CorpView({
       });
       showToast(`🏦 金利を ${(r * 100).toFixed(2)}％／30分 にしました。`, 'success');
     } catch (e) { /* noop */ }
+  };
+
+  /* ---------- 航空会社の路線 ---------- */
+  const [routeFor, setRouteFor] = useState(null);
+  const [routeDraft, setRouteDraft] = useState({ seg: 'GAMBLE|HOME', ECO: 0, BIZ: 0, FIRST: 0 });
+
+  const openRoute = (c) => {
+    const seg = Object.keys(FARES)[0];
+    const base = FARES[seg];
+    setRouteDraft({
+      seg,
+      ECO: Math.round(base * 1),
+      BIZ: Math.round(base * 2.6),
+      FIRST: Math.round(base * 7),
+    });
+    setRouteFor(c);
+  };
+  const pickSeg = (seg) => {
+    const base = FARES[seg] || 0;
+    setRouteDraft({ seg, ECO: Math.round(base), BIZ: Math.round(base * 2.6), FIRST: Math.round(base * 7) });
+  };
+  const submitRoute = async () => {
+    const c = routeFor;
+    if (!c || busyRef.current) return;
+    const seg = routeDraft.seg;
+    if (!FARES[seg]) { showToast('その区間はありません。', 'warning'); return; }
+    const already = routesOf(c);
+    if (already.length >= MAX_ROUTES) { showToast(`路線は ${MAX_ROUTES} つまでです。`, 'warning'); return; }
+    if (already.some(r => r.seg === seg)) { showToast('その路線はもう開いています。', 'warning'); return; }
+    const cls = {};
+    for (const cl of CLASSES) {
+      const v = Number(routeDraft[cl.key]);
+      if (!Number.isFinite(v) || v <= 0) continue;
+      cls[cl.key] = clampAirFare(v, FARES[seg] * cl.mult);
+    }
+    if (!Object.keys(cls).length) { showToast('クラスを1つ以上、運賃を入れてください。', 'warning'); return; }
+    busyRef.current = true; setBusy(true);
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'companies', c.id);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) throw new Error('no');
+        const cur = snap.data();
+        const free = Math.max(0, (cur.capital || 0) - (cur.deposits || 0));
+        if (free < ROUTE_FEE) throw new Error('poor');
+        const list = Array.isArray(cur.routes) ? cur.routes : [];
+        tx.update(ref, {
+          capital: increment(-ROUTE_FEE),
+          routes: [...list, { seg, cls, openedAt: Date.now() }].slice(0, MAX_ROUTES),
+          updatedAt: Date.now(),
+        });
+      });
+      showToast('🛩️ 路線をひらきました。みんなの空港に並びます。', 'success');
+      setRouteFor(null);
+    } catch (e) {
+      showToast(String(e?.message) === 'poor' ? '会社の資金が足りません。' : '路線をひらけませんでした。', 'error');
+    } finally { busyRef.current = false; setBusy(false); }
+  };
+  const deleteRoute = async (c, seg) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      await runTransaction(db, async (tx) => {
+        const ref = doc(db, 'artifacts', appId, 'public', 'data', 'companies', c.id);
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return;
+        const list = (Array.isArray(snap.data().routes) ? snap.data().routes : []).filter(r => r.seg !== seg);
+        tx.update(ref, { routes: list, updatedAt: Date.now() });
+      });
+      showToast('路線を廃止しました。', 'info');
+    } catch (e) { showToast('廃止できませんでした。', 'error'); }
+    finally { busyRef.current = false; }
   };
 
   /* ---------- 求人 ---------- */
@@ -406,7 +513,7 @@ export default function CorpView({
     <div className="p-4 md:p-8 max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> メニューに戻る</button>
-        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
       </div>
 
       <Panel gold className="p-5 mb-4">
@@ -431,6 +538,48 @@ export default function CorpView({
         ))}
       </div>
 
+      {routeFor && (
+        <Panel gold className="p-4 mb-3">
+          <h3 className="text-sm font-black text-white mb-2">{routeFor.name} の路線をひらく</h3>
+          <div className="text-[10px] font-black tracking-widest text-amber-200/60 mb-1.5">区間</div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 mb-3">
+            {Object.keys(FARES).map(seg => {
+              const [a, b] = seg.split('|');
+              const on = routeDraft.seg === seg;
+              return (
+                <button key={seg} onClick={() => pickSeg(seg)}
+                  className={`py-2 rounded-xl text-[11px] font-black border transition
+                    ${on ? 'border-amber-400 bg-amber-400/15 text-amber-200' : 'border-white/10 bg-black/40 text-gray-400'}`}>
+                  {countryOf(a)?.icon}{countryOf(a)?.short}<br />↕<br />{countryOf(b)?.icon}{countryOf(b)?.short}
+                </button>
+              );
+            })}
+          </div>
+          <div className="text-[10px] font-black tracking-widest text-amber-200/60 mb-1.5">クラスと運賃（0 にすると就航しません）</div>
+          <div className="space-y-1.5 mb-3">
+            {CLASSES.map(cl => {
+              const b = airFareBounds((FARES[routeDraft.seg] || 0) * cl.mult);
+              return (
+                <div key={cl.key} className="flex items-center gap-2">
+                  <span className="text-[12px] font-black text-white w-24 shrink-0">{cl.icon} {cl.name}</span>
+                  <input type="number" value={routeDraft[cl.key] ?? 0}
+                    onChange={e => setRouteDraft(d => ({ ...d, [cl.key]: e.target.value }))}
+                    className="flex-1 min-w-0 bg-black/60 text-white font-mono text-sm p-2 rounded-xl border border-white/10 focus:border-amber-400 outline-none" />
+                  <span className="text-[10px] text-gray-500 shrink-0 w-28 text-right">{fmt(b.min)}〜{fmt(b.max)}</span>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-gray-500 mb-2">
+            運賃は YUTAPON-FLY の基準の 0.3〜3.0 倍まで。安くすればお客が集まり、高くすれば1便あたりの利益が増えます。
+          </p>
+          <div className="flex gap-2">
+            <button onClick={() => setRouteFor(null)} className="flex-1 py-2.5 rounded-xl bg-white/10 text-white font-black text-sm">やめる</button>
+            <GoldButton onClick={submitRoute} disabled={busy} className="flex-1 py-2.5">ひらく（{fmt(ROUTE_FEE)} Y）</GoldButton>
+          </div>
+        </Panel>
+      )}
+
       {postFor && (
         <Panel gold className="p-4 mb-3">
           <h3 className="text-sm font-black text-white mb-2">{postFor.name} の求人を出す</h3>
@@ -440,7 +589,7 @@ export default function CorpView({
                 className={`p-2.5 rounded-xl border-2 text-left transition ${draft.kind === k.key ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40'}`}>
                 <div className="text-lg leading-none">{k.icon}</div>
                 <div className="text-[12px] font-black text-white">{k.name}</div>
-                <div className="text-[10px] text-gray-500">報酬 {fmt(k.min)}〜{fmt(k.max)} G・間隔 {Math.round(k.cool / 60000) || 1}分</div>
+                <div className="text-[10px] text-gray-500">報酬 {fmt(k.min)}〜{fmt(k.max)} Y・間隔 {Math.round(k.cool / 60000) || 1}分</div>
               </button>
             ))}
           </div>
@@ -466,11 +615,11 @@ export default function CorpView({
             <span className="text-[11px] font-black text-gray-400 shrink-0">報酬</span>
             <input type="number" value={draft.pay} onChange={e => setDraft(d => ({ ...d, pay: e.target.value }))}
               className="flex-1 bg-black/60 text-white font-mono text-sm p-2 rounded-xl border border-white/10 focus:border-amber-400 outline-none" />
-            <span className="text-[11px] text-gray-500 shrink-0">G / 1回</span>
+            <span className="text-[11px] text-gray-500 shrink-0">Y / 1回</span>
           </div>
           <div className="flex gap-2">
             <button onClick={() => setPostFor(null)} className="flex-1 py-2.5 rounded-xl bg-white/10 text-white font-black text-sm">やめる</button>
-            <GoldButton onClick={submitPost} className="flex-1 py-2.5">掲載する（{fmt(POST_FEE)} G）</GoldButton>
+            <GoldButton onClick={submitPost} className="flex-1 py-2.5">掲載する（{fmt(POST_FEE)} Y）</GoldButton>
           </div>
         </Panel>
       )}
@@ -483,11 +632,11 @@ export default function CorpView({
               <p className="text-sm font-bold text-white">まだ会社がありません</p>
               <p className="text-[11px] text-gray-500">「起業する」から設立できます。資格が要る業種もあります。</p>
             </Panel>
-          ) : mine.map(c => <CompanyCard key={c.id} c={c} owner playerName={playerName} now={now} amountIn={amountIn} setAmountIn={setAmountIn} onWithdraw={withdraw} onInvest={invest} onDivest={divest} onRate={setRate} onOpenPost={openPost} onDeletePost={deletePost} />)}
+          ) : mine.map(c => <CompanyCard key={c.id} c={c} owner playerName={playerName} now={now} amountIn={amountIn} setAmountIn={setAmountIn} onWithdraw={withdraw} onInvest={invest} onDivest={divest} onRate={setRate} onOpenPost={openPost} onDeletePost={deletePost} onOpenRoute={openRoute} onDeleteRoute={deleteRoute} />)}
           {invested.length > 0 && (
             <>
               <div className="text-[10px] font-black tracking-widest text-sky-300/70 pt-2">投資している会社</div>
-              {invested.map(c => <CompanyCard key={c.id} c={c} playerName={playerName} now={now} amountIn={amountIn} setAmountIn={setAmountIn} onWithdraw={withdraw} onInvest={invest} onDivest={divest} onRate={setRate} onOpenPost={openPost} onDeletePost={deletePost} />)}
+              {invested.map(c => <CompanyCard key={c.id} c={c} playerName={playerName} now={now} amountIn={amountIn} setAmountIn={setAmountIn} onWithdraw={withdraw} onInvest={invest} onDivest={divest} onRate={setRate} onOpenPost={openPost} onDeletePost={deletePost} onOpenRoute={openRoute} onDeleteRoute={deleteRoute} />)}
             </>
           )}
         </div>
@@ -501,7 +650,7 @@ export default function CorpView({
               className="w-full bg-black/60 text-white text-base p-3 rounded-xl border border-white/10 focus:border-amber-400 outline-none mb-3" />
             <GoldButton onClick={found} disabled={busy || balance < (type?.cost || 0) || !canFound(type, licenses, eduLevel).ok}
               className="w-full py-3 text-base flex items-center justify-center gap-2">
-              <Plus size={18} />{type?.name} を設立（{fmt(type?.cost)} G）
+              <Plus size={18} />{type?.name} を設立（{fmt(type?.cost)} Y）
             </GoldButton>
             <p className="text-[10px] text-gray-500 mt-1.5 text-center">設立費用の80％が会社の資産になります。1人3社まで。</p>
           </Panel>
@@ -561,7 +710,7 @@ export default function CorpView({
           </p>
           {companies.length === 0 ? (
             <Panel className="p-6 text-center"><p className="text-sm text-gray-400">まだ会社がありません。</p></Panel>
-          ) : companies.map(c => <CompanyCard key={c.id} c={c} owner={c.owner === playerName} playerName={playerName} now={now} amountIn={amountIn} setAmountIn={setAmountIn} onWithdraw={withdraw} onInvest={invest} onDivest={divest} onRate={setRate} onOpenPost={openPost} onDeletePost={deletePost} />)}
+          ) : companies.map(c => <CompanyCard key={c.id} c={c} owner={c.owner === playerName} playerName={playerName} now={now} amountIn={amountIn} setAmountIn={setAmountIn} onWithdraw={withdraw} onInvest={invest} onDivest={divest} onRate={setRate} onOpenPost={openPost} onDeletePost={deletePost} onOpenRoute={openRoute} onDeleteRoute={deleteRoute} />)}
         </div>
       )}
     </div>

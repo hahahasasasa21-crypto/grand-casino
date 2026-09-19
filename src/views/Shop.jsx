@@ -83,13 +83,13 @@ export default function Shop({
           <div className="p-3 rounded-2xl bg-amber-500/10 text-amber-300 border border-amber-500/20"><ShoppingBag size={24} /></div>
           <div>
             <h2 className="text-2xl md:text-3xl font-black text-white tracking-tight">ショップ</h2>
-            <p className="text-xs md:text-sm text-amber-200/60 font-semibold">所持金 {fmt(balance)} G</p>
+            <p className="text-xs md:text-sm text-amber-200/60 font-semibold">所持金 {fmt(balance)} Y</p>
           </div>
         </div>
         {gold > 0 && (
           <div className="px-4 py-2 rounded-2xl bg-amber-400/10 border border-amber-400/30 text-right">
             <div className="text-[10px] text-amber-200/70 font-bold">保有している金</div>
-            <div className="font-mono font-black text-amber-300">{fmt(gold)} 本 <span className="text-[11px] text-gray-400">≒ {fmt(gold * sellPx)} G</span></div>
+            <div className="font-mono font-black text-amber-300">{fmt(gold)} 本 <span className="text-[11px] text-gray-400">≒ {fmt(gold * sellPx)} Y</span></div>
           </div>
         )}
       </div>
@@ -115,7 +115,7 @@ export default function Shop({
               {fmt(goldPx)}<span className="text-base">G</span>
             </div>
             <div className="text-[11px] text-gray-500">
-              基準 {fmt(GOLD_BASE)} G ／ 売値 {fmt(sellPx)} G
+              基準 {fmt(GOLD_BASE)} Y ／ 売値 {fmt(sellPx)} Y
             </div>
           </div>
         </div>
@@ -139,7 +139,7 @@ export default function Shop({
           </div>
           <p className="text-[11px] text-gray-500 mt-2">
             みんなの通算損益 合計：
-            <b className={marketProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}> {marketProfit >= 0 ? '+' : ''}{fmt(marketProfit)} G</b>
+            <b className={marketProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}> {marketProfit >= 0 ? '+' : ''}{fmt(marketProfit)} Y</b>
           </p>
         </div>
 
@@ -157,11 +157,11 @@ export default function Shop({
           </div>
           <button onClick={() => onTradeGold('BUY', qty)} disabled={busy || balance < goldPx * qty}
             className="px-5 py-2.5 rounded-xl font-black bg-amber-500 hover:bg-amber-400 text-black transition disabled:opacity-30">
-            買う（{fmt(goldPx * qty)} G）
+            買う（{fmt(goldPx * qty)} Y）
           </button>
           <button onClick={() => onTradeGold('SELL', qty)} disabled={busy || gold < qty}
             className="px-5 py-2.5 rounded-xl font-black bg-white/10 hover:bg-white/20 text-white transition disabled:opacity-30">
-            売る（+{fmt(sellPx * qty)} G）
+            売る（+{fmt(sellPx * qty)} Y）
           </button>
         </div>
       </Panel>
@@ -280,9 +280,9 @@ export default function Shop({
             ) : (
               <>
                 <GoldButton onClick={() => run('vip', onBuyVip)} disabled={busy || balance < VIP_P} className="w-full py-4 text-lg">
-                  {busy ? '購入中…' : confirm === 'vip' ? `本当に ${fmt(VIP_P)} G で購入しますか？（もう一度押す）` : `${fmt(VIP_P)} G で購入する`}
+                  {busy ? '購入中…' : confirm === 'vip' ? `本当に ${fmt(VIP_P)} Y で購入しますか？（もう一度押す）` : `${fmt(VIP_P)} Y で購入する`}
                 </GoldButton>
-                {balance < VIP_P && <p className="text-[11px] text-red-400 mt-2 text-center">あと {fmt(VIP_P - balance)} G 足りません。</p>}
+                {balance < VIP_P && <p className="text-[11px] text-red-400 mt-2 text-center">あと {fmt(VIP_P - balance)} Y 足りません。</p>}
               </>
             )}
           </div>
@@ -300,7 +300,7 @@ export default function Shop({
                 <VipBadge size="xs" />
               </div>
               <p className="text-[11px] text-gray-400">
-                {VIP_SUB_DAYS}日ごとに {fmt(VIP_SUB_P)} G。期限が来ると自動で更新され、所持金が足りないときは自動で解約されます。
+                {VIP_SUB_DAYS}日ごとに {fmt(VIP_SUB_P)} Y。期限が来ると自動で更新され、所持金が足りないときは自動で解約されます。
               </p>
               {vipSubUntil > Date.now() && (
                 <p className="text-[11px] text-emerald-300 font-bold mt-0.5">
@@ -318,14 +318,14 @@ export default function Shop({
             </button>
           ) : (
             <GoldButton onClick={() => run('sub', onSubscribe)} disabled={busy || balance < VIP_SUB_P} className="px-6 py-2.5">
-              {confirm === 'sub' ? 'もう一度押して確定' : `${fmt(VIP_SUB_P)} G で加入`}
+              {confirm === 'sub' ? 'もう一度押して確定' : `${fmt(VIP_SUB_P)} Y で加入`}
             </GoldButton>
           )}
         </div>
       </Panel>
 
       <p className="text-[11px] text-gray-600 mt-5 text-center">
-        ※ 通貨はすべて架空のゲーム内通貨（G）です。現実のお金は一切かかりません。
+        ※ 通貨はすべて架空のゲーム内通貨（Y）です。現実のお金は一切かかりません。
       </p>
     </div>
   );

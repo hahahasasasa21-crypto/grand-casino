@@ -51,7 +51,9 @@ export const CORP_TYPES = [
   },
   {
     eduReq: 3, key: 'AIR', name: '航空会社', icon: '✈️', req: ['PILOT'], cost: 600000, base: 27000, risk: 0.6,
-    desc: '巨額の設備投資。当たれば莫大。', site: '',
+    desc: '巨額の設備投資。自分の路線をひらいて、行き先・座席クラス・運賃を決められる。',
+    site: '空港に自社便が並びます。ほかのプレイヤーがその便に乗ると、運賃の8割が会社の資産に、2割がパイロットのプールに入ります。',
+    isAirline: true,
   },
   {
     eduReq: 3, key: 'LAB', name: '研究所', icon: '🔬', req: ['PHD'], cost: 700000, base: 31000, risk: 0.5,
@@ -186,7 +188,54 @@ export function validPosting(p) {
   if (!p || !p.name || p.name.length < 2 || p.name.length > 14) return '仕事名は2〜14文字で入力してください';
   const k = postKindOf(p.kind);
   const pay = Math.floor(Number(p.pay) || 0);
-  if (pay < k.min || pay > k.max) return `報酬は ${k.min.toLocaleString()}〜${k.max.toLocaleString()} G で設定してください`;
+  if (pay < k.min || pay > k.max) return `報酬は ${k.min.toLocaleString()}〜${k.max.toLocaleString()} Y で設定してください`;
   if (!POSTING_GAMES.includes(p.game)) return '仕事の内容を選んでください';
   return '';
+}
+
+
+/* ==========================================================
+   プレイヤーの航空会社
+   ・就航する路線（区間）・座席クラス・運賃を自分で決める
+   ・ほかのプレイヤーがその便に乗ると、
+       運賃の8割が会社の資産に、2割がパイロットのプールに入る
+   ========================================================== */
+export const AIRLINE_COMPANY_SHARE = 0.8;
+export const AIRLINE_PILOT_SHARE = 0.2;
+export const MAX_ROUTES = 4;                // 1社が就航できる路線の数
+export const ROUTE_FEE = 300000;            // 1路線ひらくのにかかる費用
+/** 運賃は YUTAPON-FLY の基準の 0.3〜3.0 倍まで */
+export const AIR_FARE_MIN_MUL = 0.3;
+export const AIR_FARE_MAX_MUL = 3.0;
+
+export const isAirline = (c) => !!c?.isAirline || c?.type === 'AIR' || c?.key === 'AIR';
+
+/** 路線の形を整える */
+export function normalizeRoute(r = {}) {
+  const cls = {};
+  for (const k of ['ECO', 'BIZ', 'FIRST']) {
+    const v = Number(r?.cls?.[k]);
+    if (Number.isFinite(v) && v > 0) cls[k] = Math.round(v);
+  }
+  return { seg: String(r.seg || ''), cls, openedAt: Number(r.openedAt) || 0 };
+}
+export const routesOf = (c) => (Array.isArray(c?.routes) ? c.routes.map(normalizeRoute).filter(r => r.seg) : []);
+
+/** その会社が、その区間・そのクラスで就航しているか（運賃を返す。0なら就航なし） */
+export function airFare(company, seg, clsKey) {
+  const r = routesOf(company).find(x => x.seg === seg);
+  if (!r) return 0;
+  return Math.max(0, Math.round(r.cls?.[clsKey] || 0));
+}
+
+/** 入力した運賃を、許される範囲に丸める */
+export function clampAirFare(v, baseFareForClass) {
+  const base = Math.max(1, Math.round(baseFareForClass || 1));
+  const min = Math.round(base * AIR_FARE_MIN_MUL);
+  const max = Math.round(base * AIR_FARE_MAX_MUL);
+  return Math.max(min, Math.min(max, Math.round(Number(v) || 0)));
+}
+export function airFareBounds(baseFareForClass) {
+  const base = Math.max(1, Math.round(baseFareForClass || 1));
+  return { min: Math.round(base * AIR_FARE_MIN_MUL), max: Math.round(base * AIR_FARE_MAX_MUL), base };
 }

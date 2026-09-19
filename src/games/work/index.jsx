@@ -74,7 +74,9 @@ export default function WorkView({
   job, licenses = [], jobRecord = {}, workExp = 0, workCool = {}, saveWork,
   rankingData = [], onGroupWork, miningBalance, edu = {}, vip = false,
   companies = [], onCorpWork, items = {}, onUseItem, jobChanges = 0,
+  club = {}, flySpend = 0,
 }) {
+  const payExtra = useMemo(() => ({ flySpend, fame: club?.fame || 0 }), [flySpend, club]);
   const eduLevel = eduLevelOf(edu);
   const [tab, setTab] = useState('PART');        // PART | LICENSE | CAREER
   const [task, setTask] = useState(null);        // 実行中のミニゲーム
@@ -118,7 +120,7 @@ export default function WorkView({
     if (postingPayable(pj.company, pj.pay) <= 0) { showToast('この会社にいま支払う資金がありません。', 'error'); return; }
     setTask({
       kind: 'POST', posting: pj, game: pj.game, diff: pj.diff,
-      title: `${pj.name}（${pj.corpName}）`, sub: `${k.name}・満額 ${fmt(pj.pay)} G`,
+      title: `${pj.name}（${pj.corpName}）`, sub: `${k.name}・満額 ${fmt(pj.pay)} Y`,
     });
   };
 
@@ -132,9 +134,9 @@ export default function WorkView({
     setResult({
       headline: postKindOf(pj.kind).name.toUpperCase(), title: `${pj.corpName}・${pj.name}`, perf, ok: perf >= 0.4,
       lines: [
-        { label: '報酬', value: `+${fmt(paid)} G`, tone: 'text-emerald-300' },
+        { label: '報酬', value: `+${fmt(paid)} Y`, tone: 'text-emerald-300' },
         { label: '通算経験', value: `+${exp}` },
-        ...(paid < full ? [{ label: '会社の資金不足', value: `満額 ${fmt(full)} G`, tone: 'text-red-300' }] : []),
+        ...(paid < full ? [{ label: '会社の資金不足', value: `満額 ${fmt(full)} Y`, tone: 'text-red-300' }] : []),
       ],
       note: paid <= 0 ? 'この会社にお金がなく、報酬が支払われませんでした。' : '',
     });
@@ -149,7 +151,7 @@ export default function WorkView({
     setResult({
       headline: 'ARBEIT', title: j.name, perf, ok: perf >= 0.4,
       lines: [
-        { label: '日給', value: `+${fmt(pay)} G`, tone: 'text-emerald-300' },
+        { label: '日給', value: `+${fmt(pay)} Y`, tone: 'text-emerald-300' },
         { label: '通算経験', value: `+${exp}` },
       ],
       note: perf >= 0.95 ? '店長も驚く手際でした。' : perf < 0.3 ? '今日はうまくいきませんでした…' : '',
@@ -161,7 +163,7 @@ export default function WorkView({
     if (busyRef.current) return;
     const chk = canTakeExam(lic, licenses);
     if (!chk.ok) { showToast(chk.reason, 'warning'); return; }
-    if (balance < lic.fee) { showToast(`受験料 ${fmt(lic.fee)} G が足りません。`, 'error'); return; }
+    if (balance < lic.fee) { showToast(`受験料 ${fmt(lic.fee)} Y が足りません。`, 'error'); return; }
     busyRef.current = true; setBusy(true);
     try { await updateBalance(-lic.fee); }
     catch (e) { busyRef.current = false; setBusy(false); return; }
@@ -231,10 +233,10 @@ export default function WorkView({
       showToast(`${c.name} の再チャレンジまで あと ${Math.ceil((until - Date.now()) / 60000)} 分です。`, 'warning');
       return;
     }
-    const chk = canApply(c, licenses, workExp, eduLevel);
+    const chk = canApply(c, licenses, workExp, eduLevel, club);
     if (!chk.ok) { showToast(chk.reason, 'warning'); return; }
     const fee = applyFee(c);
-    if (balance < fee) { showToast(`受験料 ${fmt(fee)} G が足りません。`, 'error'); return; }
+    if (balance < fee) { showToast(`受験料 ${fmt(fee)} Y が足りません。`, 'error'); return; }
     busyRef.current = true; setBusy(true);
     try { await updateBalance(-fee); }
     catch (e) { busyRef.current = false; setBusy(false); return; }
@@ -291,12 +293,12 @@ export default function WorkView({
     if (shiftLeft > 0) { showToast(`次の出勤まで あと ${Math.ceil(shiftLeft / 1000)} 秒です。`, 'warning'); return; }
     setTask({
       kind: 'SHIFT', career, game: career.shift.game, diff: career.shift.diff,
-      title: `${career.name}の出勤`, sub: `${rank.name}・満額 ${fmt(shiftPayOf(job, vip))} G`,
+      title: `${career.name}の出勤`, sub: `${rank.name}・満額 ${fmt(shiftPayOf(job, vip, payExtra))} Y`,
     });
   };
 
   const finishShift = async (c, perf) => {
-    const full = shiftPayOf(job, vip);
+    const full = shiftPayOf(job, vip, payExtra);
     const pay = Math.round(full * payCurve(c, perf));
     const exp = shiftExp(c.shift.diff, perf, expMultOf(c));
     if (pay > 0) { try { await updateBalance(pay); } catch (e) { /* noop */ } }
@@ -315,7 +317,7 @@ export default function WorkView({
     setResult({
       headline: 'SHIFT', title: `${c.name}・${rank.name}`, perf, ok: perf >= 0.4,
       lines: [
-        { label: '出勤手当', value: `+${fmt(pay)} G`, tone: 'text-emerald-300' },
+        { label: '出勤手当', value: `+${fmt(pay)} Y`, tone: 'text-emerald-300' },
         { label: '経験値', value: `+${exp}` },
         ...(need ? [{ label: `${need.rank.name}まで`, value: need.left > 0 ? `あと ${need.left}` : '昇進試験を受けられます', tone: need.left > 0 ? 'text-gray-300' : 'text-amber-300' }] : []),
       ],
@@ -348,7 +350,7 @@ export default function WorkView({
       lines: [
         { label: '合格ライン', value: `${Math.round(line * 100)}％` },
         { label: 'あなたの得点', value: `${Math.round(perf * 100)}％`, tone: passed ? 'text-emerald-300' : 'text-red-300' },
-        ...(passed && nxt ? [{ label: '新しい給料', value: `${fmt(Math.round(c.salary * nxt.mult))} G / 給料日`, tone: 'text-amber-300' }] : []),
+        ...(passed && nxt ? [{ label: '新しい給料', value: `${fmt(Math.round(c.salary * nxt.mult))} Y / 給料日`, tone: 'text-amber-300' }] : []),
       ],
       note: passed && nxt ? `🎉 ${nxt.name} に昇進しました！` : 'また挑戦しましょう。',
     });
@@ -405,7 +407,7 @@ export default function WorkView({
     <div className="p-4 md:p-8 max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-4">
         <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> メニューに戻る</button>
-        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
       </div>
 
       <Panel gold className="p-5 mb-4">
@@ -471,7 +473,7 @@ export default function WorkView({
                       <p className="text-[11px] text-gray-500 truncate">🏢 {pj.corpName} が募集中</p>
                     </div>
                     <div className="text-right shrink-0">
-                      <div className="font-mono font-black text-amber-300 text-sm">{fmt(pj.pay)} G</div>
+                      <div className="font-mono font-black text-amber-300 text-sm">{fmt(pj.pay)} Y</div>
                       <div className="text-[10px] text-gray-500">
                         {payable <= 0 ? '資金切れ' : left > 0 ? `休憩 ${Math.ceil(left / 1000)}s` : '働く'}
                       </div>
@@ -499,7 +501,7 @@ export default function WorkView({
                   <p className="text-[11px] text-gray-500 truncate">{j.desc}</p>
                 </div>
                 <div className="text-right shrink-0">
-                  <div className="font-mono font-black text-amber-300 text-sm">〜{fmt(j.pay * 1.2)} G</div>
+                  <div className="font-mono font-black text-amber-300 text-sm">〜{fmt(j.pay * 1.2)} Y</div>
                   <div className="text-[10px] text-gray-500">{left > 0 ? `休憩 ${Math.ceil(left / 1000)}s` : '働く'}</div>
                 </div>
               </button>
@@ -546,7 +548,7 @@ export default function WorkView({
                   ) : (
                     <button onClick={() => startExam(l)} disabled={!chk.ok || busy || balance < l.fee}
                       className="mt-0.5 px-3 py-1.5 rounded-xl bg-sky-600/80 hover:bg-sky-500 text-white text-[11px] font-black disabled:opacity-30">
-                      受験 {fmt(l.fee)}G
+                      受験 {fmt(l.fee)}Y
                     </button>
                   )}
                 </div>
@@ -573,12 +575,12 @@ export default function WorkView({
               <div className="grid grid-cols-2 gap-2 mb-3">
                 <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
                   <div className="text-[9px] text-gray-500 font-bold">給料（{Math.round(PAY_INTERVAL / 60000)}分ごと）</div>
-                  <div className="font-mono font-black text-emerald-300">{fmt(salaryOf(job, eduLevel, vip))} G</div>
+                  <div className="font-mono font-black text-emerald-300">{fmt(salaryOf(job, eduLevel, vip, payExtra))} Y</div>
                   <div className="text-[10px] text-gray-500 flex items-center gap-1"><Clock size={9} />次まで {mmss(payLeft)}</div>
                 </div>
                 <div className="p-2.5 rounded-xl bg-black/40 border border-white/10">
                   <div className="text-[9px] text-gray-500 font-bold">出勤手当（満額）</div>
-                  <div className="font-mono font-black text-amber-300">{fmt(shiftPayOf(job, vip))} G</div>
+                  <div className="font-mono font-black text-amber-300">{fmt(shiftPayOf(job, vip, payExtra))} Y</div>
                   <div className="text-[10px] text-gray-500">{gameOf(career.shift.game).icon}{gameOf(career.shift.game).name}・<Stars n={career.shift.diff} /></div>
                 </div>
               </div>
@@ -643,7 +645,7 @@ export default function WorkView({
 
           <div className="space-y-2">
             {CAREERS.map(c => {
-              const chk = canApply(c, licenses, workExp, eduLevel);
+              const chk = canApply(c, licenses, workExp, eduLevel, club);
               const mine = job?.key === c.key;
               const rec = jobRecord[c.key];
               return (
@@ -683,16 +685,16 @@ export default function WorkView({
                         </span>
                       )}
                       {c.volatile && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md border text-amber-300 border-amber-400/30 bg-amber-500/10">💥 出来ばえで激変</span>}
-                      {c.group && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md border text-amber-200 border-amber-300/40 bg-amber-400/15">🌟 給料6倍・経験10倍</span>}
+                      {c.group && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-md border text-amber-200 border-amber-300/40 bg-amber-400/15">🌟 YUTAPON-GROUP {c.group === 'FLY' ? 'FLY' : c.group === 'BANK' ? 'BANK' : 'CASINO'} 部</span>}
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <div className="font-mono font-black text-amber-300 text-sm">{fmt(c.salary)} G</div>
+                    <div className="font-mono font-black text-amber-300 text-sm">{fmt(c.salary)} Y</div>
                     <div className="text-[9px] text-gray-500 mb-1">給料/{Math.round(PAY_INTERVAL / 60000)}分</div>
                     {!mine && (
                       <button onClick={() => startApply(c)} disabled={!chk.ok || !!job || busy}
                         className="px-3 py-1.5 rounded-xl bg-sky-600/80 hover:bg-sky-500 text-white text-[11px] font-black disabled:opacity-30">
-                        応募 {fmt(applyFee(c))}G
+                        応募 {fmt(applyFee(c))}Y
                       </button>
                     )}
                   </div>

@@ -274,7 +274,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
     if (!card) return;
     if (picks.length < requiredPicks) { showToast(`${BET_TYPES[betType].label}は${requiredPicks}頭選んでください。`, 'error'); return; }
     const amount = Math.floor(Number(betAmount) || 0);
-    if (amount < 100) { showToast('100G以上を指定してください。', 'error'); return; }
+    if (amount < 100) { showToast('100Y以上を指定してください。', 'error'); return; }
 
     // 1頭選択の券種は選んだ頭数ぶんをまとめ買い、2頭以上は1組ずつ（1レース2組まで）
     const groups = isSingle ? picks.map(id => [id]) : [picks.slice(0, requiredPicks)];
@@ -294,8 +294,8 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
     setPicks([]);
     playSfx('coin');
     showToast(made.length > 1
-      ? `🎫 ${BET_TYPES[betType].label} を ${made.length}点（計 ${fmt(cost)}G）購入`
-      : `🎫 ${BET_TYPES[betType].label} ${made[0].picks.join('-')} を ${fmt(amount)}G 購入`, 'success');
+      ? `🎫 ${BET_TYPES[betType].label} を ${made.length}点（計 ${fmt(cost)}Y）購入`
+      : `🎫 ${BET_TYPES[betType].label} ${made[0].picks.join('-')} を ${fmt(amount)}Y 購入`, 'success');
     if (mode === 'PUBLIC' && roomId) {
       for (const t of made) {
         try { await addDoc(ticketsRef(roomId), { ...t, player: playerName, at: Date.now() }); } catch (e) { /* noop */ }
@@ -339,9 +339,9 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
     });
     if (total > 0) {
       try { await updateBalance(total); } catch (e) { /* noop */ }
-      showToast(`🏇 的中！ 払戻 +${fmt(total)} G`, 'success');
+      showToast(`🏇 的中！ 払戻 +${fmt(total)} Y`, 'success');
       playSfx('win');
-      if (total >= 100000) emitNews(`🏇 ${playerName} が競馬で大的中！ ${fmt(total)} G 獲得！`, 'race');
+      if (total >= 100000) emitNews(`🏇 ${playerName} が競馬で大的中！ ${fmt(total)} Y 獲得！`, 'race');
     } else if (theTickets.length) {
       showToast('ハズレ…次のレースへ', 'warning');
       playSfx('lose');
@@ -567,7 +567,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
             {card.weather.icon} {card.weather.name}／馬場 <span className={TURF_COLOR[card.turf]}>{card.turf}</span>
           </div>
         )}
-        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+        <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
       </div>
     </div>
   );
@@ -791,7 +791,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                     <div key={i} className={`flex items-center gap-2 text-xs p-2 rounded-lg ${t.hit ? 'bg-emerald-500/10 border border-emerald-400/30' : 'bg-black/40 border border-white/5'}`}>
                       <span className="font-black text-gray-300 w-14">{BET_TYPES[t.type].label}</span>
                       <span className="font-mono text-white flex-1">{t.picks.join('-')}</span>
-                      <span className="text-gray-500">{fmt(t.amount)}G ×{t.mult}</span>
+                      <span className="text-gray-500">{fmt(t.amount)}Y ×{t.mult}</span>
                       <span className={`font-black w-24 text-right ${t.hit ? 'text-emerald-400' : 'text-red-400'}`}>
                         {t.hit ? `+${fmt(t.win)}` : 'ハズレ'}
                       </span>
@@ -800,7 +800,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                   <div className="flex justify-between items-center pt-2 border-t border-white/10">
                     <span className="text-xs text-gray-400 font-bold">収支</span>
                     <span className={`font-mono font-black text-lg ${payouts.total - payouts.staked >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                      {payouts.total - payouts.staked >= 0 ? '+' : ''}{fmt(payouts.total - payouts.staked)} G
+                      {payouts.total - payouts.staked >= 0 ? '+' : ''}{fmt(payouts.total - payouts.staked)} Y
                     </span>
                   </div>
                 </div>
@@ -839,12 +839,12 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
               <Panel className="p-3">
                 <div className="flex items-center justify-between mb-1.5">
                   <h3 className="text-sm font-black text-white flex items-center gap-1.5"><Eye size={15} /> 情報開示</h3>
-                  <span className="text-[11px] font-mono font-black text-sky-300">1回 {fmt(unitCost)} G</span>
+                  <span className="text-[11px] font-mono font-black text-sky-300">1回 {fmt(unitCost)} Y</span>
                 </div>
                 <p className="text-[10px] text-gray-500 leading-snug">
                   馬の「<b className="text-gray-300">スピード / 体力 / オッズ / スキル</b>」のうち、まだ隠れている1項目が<b className="text-gray-300">ランダムに</b>判明します。<br />
                   <b className="text-sky-300">1頭につき {MAX_REVEAL_PER_HORSE}項目 まで</b>。<br />
-                  単価 = 200G ＋ 購入予定額 <b className="text-gray-300">{fmt(betAmount)}G</b> の40％。開示のたびに ×1.25（現在{revealsUsed}回）。
+                  単価 = 200Y ＋ 購入予定額 <b className="text-gray-300">{fmt(betAmount)}Y</b> の40％。開示のたびに ×1.25（現在{revealsUsed}回）。
                 </p>
               </Panel>
 
@@ -914,23 +914,23 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                 <div className="flex items-center justify-between text-[11px] mb-2">
                   <span className="text-gray-400">選択：<span className="font-mono text-white">{picks.length ? picks.join('-') : '—'}</span></span>
                   {expectedMult > 0 ? (
-                    <span className="text-gray-400">的中 <span className="text-amber-300 font-black">{fmt(Math.floor((Number(betAmount) || 0) * expectedMult))}G</span>（{expectedMult}倍）</span>
+                    <span className="text-gray-400">的中 <span className="text-amber-300 font-black">{fmt(Math.floor((Number(betAmount) || 0) * expectedMult))}Y</span>（{expectedMult}倍）</span>
                   ) : picks.length >= requiredPicks ? (
                     <span className="text-gray-500 flex items-center gap-1"><Eye size={10} />倍率はオッズを開示すると分かります</span>
                   ) : null}
                 </div>
                 <GoldButton onClick={buyTicket} disabled={phase !== 'BETTING' || picks.length < requiredPicks}
                   className="w-full py-2.5 flex items-center justify-center gap-2">
-                  <Ticket size={16} /> {isSingle && picks.length > 1 ? `${picks.length}点を購入（${fmt(totalCost)}G）` : '馬券を購入'}
+                  <Ticket size={16} /> {isSingle && picks.length > 1 ? `${picks.length}点を購入（${fmt(totalCost)}Y）` : '馬券を購入'}
                 </GoldButton>
                 {tickets.length > 0 && (
                   <div className="mt-2 space-y-1">
-                    <div className="text-[10px] text-gray-500 font-bold">購入済み {tickets.length}枚／計 {fmt(totalStaked)}G</div>
+                    <div className="text-[10px] text-gray-500 font-bold">購入済み {tickets.length}枚／計 {fmt(totalStaked)}Y</div>
                     {tickets.map((t, i) => (
                       <div key={i} className="flex items-center gap-2 text-[11px] bg-black/40 rounded-lg px-2 py-1 border border-white/5">
                         <span className="font-black text-amber-300 w-12">{BET_TYPES[t.type].label}</span>
                         <span className="font-mono text-white flex-1">{t.picks.join('-')}</span>
-                        <span className="text-gray-500">{fmt(t.amount)}G ×{oddsKnown(t.picks) ? t.mult : '?'}</span>
+                        <span className="text-gray-500">{fmt(t.amount)}Y ×{oddsKnown(t.picks) ? t.mult : '?'}</span>
                       </div>
                     ))}
                   </div>
@@ -965,7 +965,7 @@ export default function HorseRacing({ balance, updateBalance, onBack, showToast,
                         <span className="font-bold text-sky-300 w-16 truncate">{t.player}</span>
                         <span className="font-black text-amber-300 w-10">{BET_TYPES[t.type]?.label}</span>
                         <span className="font-mono text-white flex-1">{(t.picks || []).join('-')}</span>
-                        <span className="text-gray-500">{fmt(t.amount)}G</span>
+                        <span className="text-gray-500">{fmt(t.amount)}Y</span>
                       </div>
                     ))}
                     {viewers.length > 0 && (

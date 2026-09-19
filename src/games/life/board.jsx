@@ -473,9 +473,9 @@ export function Spinner({ value, spinKey, onSettle, size = 208 }) {
 
   useEffect(() => {
     if (!spinKey || !value) return;
-    if (first.current) { first.current = false; rot.current = -((value - 1) * SEC_DEG) - SEC_DEG / 2; apply(); return; }
+    if (first.current) { first.current = false; rot.current = -((value - 1) * SEC_DEG) - SEC_DEY / 2; apply(); return; }
     const from = rot.current;
-    let target = -((value - 1) * SEC_DEG) - SEC_DEG / 2;
+    let target = -((value - 1) * SEC_DEG) - SEC_DEY / 2;
     while (target < from + 360 * 4) target += 360;
     const dur = 2300;
     const t0 = performance.now();
@@ -521,7 +521,7 @@ export function Spinner({ value, spinKey, onSettle, size = 208 }) {
           <g key={k}>
             <path d={sectorPath(k, 16, 84)} fill={k % 2 ? '#f4ead2' : '#a62a2a'} stroke="rgba(0,0,0,.35)" strokeWidth="1" />
             <text
-              transform={`rotate(${k * SEC_DEG + SEC_DEG / 2} 100 100)`}
+              transform={`rotate(${k * SEC_DEG + SEC_DEY / 2} 100 100)`}
               x="100" y="38" textAnchor="middle" fontSize="20" fontWeight="900"
               fill={k % 2 ? '#7a1a1a' : '#ffeec2'}>{k + 1}</text>
           </g>

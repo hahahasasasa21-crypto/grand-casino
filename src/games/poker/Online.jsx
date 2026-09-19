@@ -116,7 +116,7 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
 
   /* ---------- 部屋の作成／参加 ---------- */
   const createRoom = async () => {
-    if (balance < stake.buyin) { showToast(`バイイン ${fmt(stake.buyin)} G が必要です。`, 'error'); return; }
+    if (balance < stake.buyin) { showToast(`バイイン ${fmt(stake.buyin)} Y が必要です。`, 'error'); return; }
     setBusy(true);
     try {
       const ref = doc(roomsRef());
@@ -141,7 +141,7 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
   const joinRoom = async (r) => {
     const existing = (r.seats || []).findIndex(s => s && s.name === playerName);
     if (existing >= 0) { setRoomId(r.id); setBuyinAt(r.seats[existing].stack); showToast('席に戻りました。', 'info'); return; }
-    if (balance < r.buyin) { showToast(`バイイン ${fmt(r.buyin)} G が必要です。`, 'error'); return; }
+    if (balance < r.buyin) { showToast(`バイイン ${fmt(r.buyin)} Y が必要です。`, 'error'); return; }
     setBusy(true);
     try {
       let ok = false;
@@ -189,8 +189,8 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
       if (back > 0) await updateBalance(back).catch(() => { });
       await deleteDoc(doc(presenceRef(room.id), encodeURIComponent(playerName))).catch(() => { });
       const net = back - buyinAt;
-      if (net >= 20000) emitNews(`🃏 ${playerName} がオンラインポーカーで +${fmt(net)} G を持ち帰りました！`, 'poker');
-      showToast(`💰 ${fmt(back)} G を持って退席しました（収支 ${net >= 0 ? '+' : ''}${fmt(net)} G）`, net >= 0 ? 'success' : 'warning');
+      if (net >= 20000) emitNews(`🃏 ${playerName} がオンラインポーカーで +${fmt(net)} Y を持ち帰りました！`, 'poker');
+      showToast(`💰 ${fmt(back)} Y を持って退席しました（収支 ${net >= 0 ? '+' : ''}${fmt(net)} Y）`, net >= 0 ? 'success' : 'warning');
       setRoomId(null); setRoom(null);
     } catch (e) { showToast('退席に失敗しました。', 'error'); }
     finally { setBusy(false); }
@@ -321,7 +321,7 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
       <div className="p-4 md:p-6 max-w-4xl mx-auto">
         <div className="w-full flex justify-between items-center mb-4">
           <button onClick={onBack} className="flex items-center gap-2 text-gray-400 hover:text-white transition"><ArrowLeft size={20} /> 戻る</button>
-          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} G</div>
+          <div className="bg-black/60 px-4 py-2 rounded-full border border-amber-500/30 font-mono text-lg text-amber-300 font-bold">{fmt(balance)} Y</div>
         </div>
 
         <Panel gold className="p-5 mb-4">
@@ -345,7 +345,7 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
                       <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-400/15 text-amber-200 border border-amber-400/30">{r.stakeLabel}</span>
                     </div>
                     <div className="text-[11px] text-gray-500">
-                      {occupied.length} / {r.maxSeats} 人 ・ バイイン {fmt(r.buyin)} G
+                      {occupied.length} / {r.maxSeats} 人 ・ バイイン {fmt(r.buyin)} Y
                       {occupied.length > 0 && <> ・ {occupied.map(s => s.name).join('、')}</>}
                     </div>
                   </div>
@@ -370,7 +370,7 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
               <button key={s.label} onClick={() => setStakeIdx(i)}
                 className={`p-3 rounded-2xl border-2 text-left transition ${stakeIdx === i ? 'border-amber-400 bg-amber-400/10' : 'border-white/10 bg-black/40 hover:bg-white/5'}`}>
                 <div className="text-lg font-black text-white">{s.label}</div>
-                <div className="text-[11px] text-gray-400">バイイン {fmt(s.buyin)} G</div>
+                <div className="text-[11px] text-gray-400">バイイン {fmt(s.buyin)} Y</div>
               </button>
             ))}
           </div>
@@ -384,7 +384,7 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
             ))}
           </div>
           <GoldButton onClick={createRoom} disabled={busy || balance < stake.buyin} className="w-full py-3.5 text-lg">
-            {fmt(stake.buyin)} G で立ち上げて着席する
+            {fmt(stake.buyin)} Y で立ち上げて着席する
           </GoldButton>
         </Panel>
 
@@ -437,7 +437,7 @@ export default function PokerOnline({ balance, updateBalance, onBack, showToast,
               {(() => { const cur = mySeat >= 0 ? (hand && me ? me.stack : seats[mySeat]?.stack || 0) : 0; const d = cur - buyinAt; return (d >= 0 ? '+' : '') + fmt(d); })()}
             </div>
           </div>
-          <div className="bg-black/60 px-3 py-1.5 rounded-full border border-amber-500/30 font-mono text-base text-amber-300 font-bold">{fmt(balance)} G</div>
+          <div className="bg-black/60 px-3 py-1.5 rounded-full border border-amber-500/30 font-mono text-base text-amber-300 font-bold">{fmt(balance)} Y</div>
         </div>
       </div>
 

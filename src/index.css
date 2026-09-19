@@ -1,3 +1,146 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  :root {
+    --felt-deep: #07100c;
+    --gold-100: #fde68a;
+    --gold-400: #d4af37;
+    --gold-700: #8a6a14;
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    font-family: 'Noto Sans JP', ui-sans-serif, system-ui, 'Hiragino Kaku Gothic ProN',
+      'Yu Gothic', Meiryo, sans-serif;
+    background-color: var(--felt-deep);
+    font-feature-settings: 'palt' 1;
+    letter-spacing: 0.01em;
+  }
+
+  ::selection {
+    background: rgba(212, 175, 55, 0.35);
+    color: #fff;
+  }
+
+  /* スクロールバーをカジノ調に */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(212, 175, 55, 0.35) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+  }
+  *::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, rgba(212, 175, 55, 0.55), rgba(138, 106, 20, 0.55));
+    border-radius: 99px;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(212, 175, 55, 0.8);
+  }
+
+  /* 数字は等幅で桁を揃える */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* 見出し用のディスプレイ書体（欧文 Cinzel＋和文 しっぽり明朝） */
+  .font-display {
+    font-family: 'Cinzel', 'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    letter-spacing: 0.06em;
+  }
+  .font-serif-jp {
+    font-family: 'Shippori Mincho', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+  }
+
+  /* 金の箔押し文字 */
+  .text-gilt {
+    background-image: linear-gradient(
+      180deg,
+      #fff3c4 0%,
+      #f3d27a 28%,
+      #d4af37 52%,
+      #a9801f 74%,
+      #f0d68d 100%
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  }
+
+  /* 金の細いディバイダ（中央に菱形） */
+  .rule-gold {
+    position: relative;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(212, 175, 55, 0.55) 20%,
+      rgba(212, 175, 55, 0.55) 80%,
+      transparent
+    );
+  }
+  .rule-gold::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 7px;
+    height: 7px;
+    transform: translate(-50%, -50%) rotate(45deg);
+    background: linear-gradient(135deg, #f3d27a, #a9801f);
+  }
+
+  /* 緑のフェルト地 */
+  .felt-surface {
+    background-image: radial-gradient(ellipse at 50% 0%, #135c3a 0%, #0a2b1c 55%, #061510 100%);
+  }
+  .felt-weave {
+    background-image: repeating-linear-gradient(
+        45deg,
+        rgba(255, 255, 255, 0.045) 0 1px,
+        transparent 1px 6px
+      ),
+      repeating-linear-gradient(-45deg, rgba(0, 0, 0, 0.06) 0 1px, transparent 1px 6px);
+  }
+
+  /* 光沢が横切るアニメーション（大当たり演出用） */
+  .sheen {
+    position: relative;
+    overflow: hidden;
+  }
+  .sheen::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg, transparent 35%, rgba(255, 255, 255, 0.35) 50%, transparent 65%);
+    transform: translateX(-120%);
+    animation: sheen-sweep 2.8s ease-in-out infinite;
+  }
+  @keyframes sheen-sweep {
+    0%,
+    60% {
+      transform: translateX(-120%);
+    }
+    100% {
+      transform: translateX(120%);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheen::before {
+    animation: none;
+  }
+}
